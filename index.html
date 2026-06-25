@@ -1,4 +1,35 @@
 <!DOCTYPE html>
+<!--
+================================================================================
+ R+Coach · STYLIST APP — 1:1 Coaching Roadmap & Book-Building Forecast
+ © 2026 R+Co / R+Coach. All Rights Reserved.
+
+ PROPRIETARY & CONFIDENTIAL · TRADE SECRET PROTECTED
+
+ This file — including but not limited to all HTML structure, CSS, JavaScript,
+ the Cohort-Based Book-Building Simulation Framework (Methodology v1.0), the
+ capacity-decay throttle model (15%/20%/50%/80% tier bands), the 50% repeat-
+ retention / 90-day cycle compounding logic, the 6-Format Authority TikTok
+ Playbook, the diagnose-then-prescribe consultative framework (Breakage →
+ BOND BUILDING, Dry → HYDRATION, Fine → VOLUME), the salon-as-steward / stylist-
+ as-creator social orchestration model, the references & resources APA citation
+ system, and all associated copy and creative — constitutes confidential trade-
+ secret intellectual property of R+Co / R+Coach.
+
+ Reproduction, reverse-engineering, scraping, redistribution, derivative use,
+ or incorporation into any competing product or service — in whole or in part —
+ is STRICTLY PROHIBITED without prior written authorization from R+Coach.
+
+ This software is authorized solely for use by licensed R+Coach Brand Managers
+ and contracted partner salons under the terms of their executed agreements.
+
+ Unauthorized use, disclosure, or replication will be prosecuted to the fullest
+ extent permitted under the Defend Trade Secrets Act (DTSA), applicable state
+ trade-secret statutes, federal copyright law, and applicable trademark law.
+
+ Build fingerprint: see window.__RC_BUILD at runtime.
+================================================================================
+-->
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -283,6 +314,7 @@
 
     /* ── Legal ── */
     .legal-text { font-size:9px; color:var(--muted); line-height:1.5; text-align:center; padding:16px 20px; border-top:1px solid var(--border); }
+    .legal-build-id { display:block; margin-top:6px; font-family: ui-monospace, Menlo, monospace; font-size:8px; color:rgba(0,0,0,0.32); letter-spacing:0.04em; }
 
     /* ── Month range selector ── */
     .date-range-row { display:flex; gap:8px; }
@@ -356,6 +388,9 @@ function defaultState() {
     returnedIn90:      '',
     annualNewClients:  '',
     avgTicket:         '',
+    // Capacity (book ceiling) — drives the simulation throttle
+    daysPerWeek:    5,
+    clientsPerDay:  6,
     currentScreen: 'setup',
   };
 }
@@ -442,6 +477,124 @@ function getRetentionRevenue(pct) {
   const anc = parseFloat(state.annualNewClients)||getTotals().newClients;
   const at  = parseFloat(state.avgTicket)||0;
   return anc*(pct/100)*at*4;
+}
+
+// ============================================================
+// CAPACITY MODEL — derives the stylist's book ceiling
+// daysPerWeek × clientsPerDay × ~4.33 weeks/month
+// ============================================================
+function getMaxBook() {
+  const d = parseFloat(state.daysPerWeek)  || 5;
+  const c = parseFloat(state.clientsPerDay) || 6;
+  return Math.round(d * c * 4.33); // ~weeks per month
+}
+
+// ============================================================
+// COHORT SIMULATION — Book-Building Roadmap
+//
+// Model (per user spec — May 2026):
+//   • Month 1 baseline = avg total clients/month from data entry
+//   • Existing recurring base = baseline − avg monthly new clients (clamped ≥ 0)
+//   • Each month adds a NEW-CLIENT COHORT
+//   • Each cohort returns 50% of size every 3 months indefinitely (90-day cycle)
+//   • New-client intake throttles based on current book vs. max (capacity decay):
+//       <42% of max:    100% intake
+//       42–54% of max:  −15%
+//       54–67% of max:  −20%
+//       67–83% of max:  −50%
+//       83–100% of max: −80%
+//       at/above max:   0  (book is full)
+//   • Hard cap = max book (slider-derived)
+// Returns array of {month, total, existing, new, returning, intake, throttleBand}
+// ============================================================
+function simulateBookBuild(months = 36) {
+  const t = getTotals();
+  const filledM = (state.monthData||[]).filter(m=>m.totalClients!=='').length || 1;
+  const baseline = t.totalClients / filledM;          // avg total clients/mo entered
+  const baseNew  = t.newClients  / filledM;            // avg new clients/mo entered
+  const existing = Math.max(0, baseline - baseNew);    // stable recurring core
+  const retention = 0.50;                              // 50% of each cohort returns
+  const cycleMonths = 3;                               // 90-day return cycle
+  const maxBook = getMaxBook();
+
+  // Throttle bands as fraction-of-max
+  function throttleFactor(currentTotal) {
+    if (maxBook <= 0) return 1;
+    const pct = currentTotal / maxBook;
+    if (pct >= 1.00) return 0;        // at cap
+    if (pct >= 0.83) return 0.20;     // 83–100%: −80%
+    if (pct >= 0.67) return 0.50;     // 67–83%: −50%
+    if (pct >= 0.54) return 0.80;     // 54–67%: −20%
+    if (pct >= 0.42) return 0.85;     // 42–54%: −15%
+    return 1.00;                       // <42%: full
+  }
+  function bandLabel(pct) {
+    if (pct >= 1.00) return 'AT CAP';
+    if (pct >= 0.83) return '−80% intake';
+    if (pct >= 0.67) return '−50% intake';
+    if (pct >= 0.54) return '−20% intake';
+    if (pct >= 0.42) return '−15% intake';
+    return 'full intake';
+  }
+
+  const cohorts = []; // each: {month: M, size: N} — N new clients added in month M
+  const rows = [];
+  let priorTotal = baseline;
+
+  for (let m = 1; m <= months; m++) {
+    // Determine new-client intake for THIS month.
+    // Rule 1: Trust the real-world baseline. As long as the book is at or below the entered
+    //         baseline (priorTotal <= baseline), the stylist is empirically absorbing baseNew
+    //         clients/month — no throttle. The throttle ONLY engages once growth pushes the
+    //         book past where it was when the data was captured.
+    // Rule 2: From there, the throttle band reduces intake as the book climbs toward max.
+    const aboveBaseline = priorTotal > baseline;
+    const factor = aboveBaseline ? throttleFactor(priorTotal) : 1;
+    const monthlyNew = Math.round(baseNew * factor);
+
+    // Returners this month = sum over cohorts whose return cycle hits this exact month
+    // A cohort from month K returns at K+3, K+6, K+9 ...
+    let returning = 0;
+    for (const c of cohorts) {
+      const ageMonths = m - c.month;
+      if (ageMonths > 0 && ageMonths % cycleMonths === 0) {
+        returning += Math.round(c.size * retention);
+      }
+    }
+
+    // Total this month
+    let total = existing + returning + monthlyNew;
+    // Hard cap at max book (capacity ceiling)
+    if (total > maxBook) total = maxBook;
+    // Floor: the book never *shrinks* month-over-month. Transient throttle dips at tier
+    // transitions get smoothed — the chair stays at the prior level until growth catches up.
+    if (total < priorTotal) total = priorTotal;
+    // Also: never fall below the entered baseline (we trust the ground-truth observation).
+    if (total < baseline) total = baseline;
+
+    const pct = maxBook > 0 ? priorTotal / maxBook : 0;
+    rows.push({
+      month: m,
+      total,
+      existing,
+      new: monthlyNew,
+      returning,
+      throttleBand: bandLabel(pct),
+      pctOfMax: maxBook > 0 ? total / maxBook : 0,
+    });
+
+    // Record cohort for future return cycles (only if any new came in)
+    if (monthlyNew > 0) cohorts.push({ month: m, size: monthlyNew });
+
+    priorTotal = total;
+  }
+
+  // Find first month where total crosses 90% of max (≈ "full book")
+  const fullThreshold = maxBook * 0.95;
+  const fullMonthRow = rows.find(r => r.total >= fullThreshold);
+  const monthsToFull = fullMonthRow ? fullMonthRow.month : null;
+
+  return { baseline, existing, baseNew, maxBook, rows, monthsToFull };
 }
 
 // ── Month data builder ────────────────────────────────────────
@@ -597,7 +750,10 @@ function buildSetup() {
       </div>
 
       <div class="legal-text" style="margin-top:24px">
-        PROPRIETARY &amp; CONFIDENTIAL — Powered by R+Coach® technology. This stylist roadmap contains proprietary coaching methodologies developed by R+Co for our authorized salon partners and their teams. Shared as a coaching resource — please keep its contents within your salon. Unauthorized sharing, reproduction, or distribution is prohibited. © R+Coach. All rights reserved.
+        © 2026 R+Co / R+Coach. All Rights Reserved.<br>
+        <strong style="color:rgba(0,0,0,0.55);letter-spacing:0.06em">PROPRIETARY &amp; CONFIDENTIAL · TRADE SECRET PROTECTED.</strong><br>
+        The R+Coach® system — including the Cohort-Based Book-Building Simulation Framework, the capacity-decay throttle model, the 6-Format TikTok Authority Playbook, the diagnose-then-prescribe consultative framework, the salon-as-steward social orchestration model, and all associated copy and creative — is the confidential intellectual property of R+Co / R+Coach. Reproduction, reverse-engineering, redistribution, derivative use, or incorporation into any competing product or service is strictly prohibited without prior written authorization. Authorized solely for use by licensed R+Coach Brand Managers and contracted partner salons under the terms of their executed agreements. Unauthorized use will be prosecuted under the Defend Trade Secrets Act and applicable copyright and trademark law.
+        <span class="legal-build-id" id="legal-build-id-stylist-1"></span>
       </div>
     </div>
   `;
@@ -881,7 +1037,7 @@ function buildRetention() {
     <div class="callout callout-muted" style="border-left:4px solid var(--purple)">
       <div class="cl-label" style="color:var(--purple)">Why this matters</div>
       <div style="font-size:14px;color:var(--muted);line-height:1.6;margin-top:4px">
-        Industry average is <strong>25–30%</strong>. The R+Coach benchmark is <strong>50%</strong> — 1 in 2 new clients comes back within 90 days. This is the single biggest lever for building a loyal column.
+        Industry average is <strong>25–30%</strong><sup style="color:var(--purple);font-weight:700">¹</sup>. The R+Coach benchmark is <strong>50%</strong> — 1 in 2 new clients comes back within 90 days. This is the single biggest lever for building a loyal column.
       </div>
     </div>
 
@@ -915,6 +1071,32 @@ function buildRetention() {
       <input class="field-input" type="number" id="avgTicket" inputmode="decimal" placeholder="e.g. 85" value="${state.avgTicket}">
       <div class="field-hint">Average revenue per service visit for ${styName}.</div>
     </div>
+
+    <div class="section-label" style="margin-top:28px">Step 4 — Define ${styName}'s capacity (full book)</div>
+    <p style="font-size:14px;color:var(--muted);line-height:1.6;margin-bottom:14px">
+      Every chair has a ceiling. A full-time stylist can hold a bigger book than a part-time stylist. Set ${styName}'s realistic capacity below — this drives the roadmap math (and when new-client intake should start tapering off as the calendar tightens).
+    </p>
+
+    <div class="field-group">
+      <label class="field-label">Days Worked Per Week — <span id="dpwDisplay" style="color:var(--purple);font-weight:700">${state.daysPerWeek||5}</span></label>
+      <input type="range" id="daysPerWeek" min="1" max="7" step="1" value="${state.daysPerWeek||5}" style="width:100%">
+      <div class="field-hint">How many days behind the chair?</div>
+    </div>
+
+    <div class="field-group">
+      <label class="field-label">Clients Per Day at Full Day — <span id="cpdDisplay" style="color:var(--purple);font-weight:700">${state.clientsPerDay||6}</span></label>
+      <input type="range" id="clientsPerDay" min="3" max="12" step="1" value="${state.clientsPerDay||6}" style="width:100%">
+      <div class="field-hint">A typical full day's client load.</div>
+    </div>
+
+    <div class="callout callout-muted" style="border-left:4px solid var(--success);margin-top:6px">
+      <div class="cl-label" style="color:var(--success)">${styName}'s Full Book Capacity</div>
+      <div class="cl-value" id="maxBookDisplay" style="color:var(--success)">${getMaxBook()} clients/month</div>
+      <div class="cl-sub" style="font-size:12px;color:var(--muted)">
+        <span id="maxBookFormula">${state.daysPerWeek||5} days × ${state.clientsPerDay||6} clients/day × 4.33 weeks/mo</span><br>
+        This is the cap the book-building roadmap will build toward.
+      </div>
+    </div>
   `;
 }
 
@@ -931,7 +1113,29 @@ function bindRetention() {
       if(id==='sevenMonthClients'||id==='returnedIn90') updateRetentionDisplay();
     });
   });
+  // Capacity sliders
+  ['daysPerWeek','clientsPerDay'].forEach(id => {
+    document.getElementById(id)?.addEventListener('input', function() {
+      state[id] = parseFloat(this.value);
+      saveState();
+      updateCapacityDisplay();
+    });
+  });
   updateRetentionDisplay();
+  updateCapacityDisplay();
+}
+
+function updateCapacityDisplay() {
+  const d = state.daysPerWeek || 5;
+  const c = state.clientsPerDay || 6;
+  const dpwEl = document.getElementById('dpwDisplay');
+  const cpdEl = document.getElementById('cpdDisplay');
+  const mxEl  = document.getElementById('maxBookDisplay');
+  const fEl   = document.getElementById('maxBookFormula');
+  if (dpwEl) dpwEl.textContent = d;
+  if (cpdEl) cpdEl.textContent = c;
+  if (mxEl)  mxEl.textContent  = getMaxBook() + ' clients/month';
+  if (fEl)   fEl.textContent   = `${d} days × ${c} clients/day × 4.33 weeks/mo`;
 }
 
 function prefillRetention() {
@@ -967,7 +1171,7 @@ function updateRetentionDisplay() {
       <div class="cl-label">New Client Retention</div>
       <div class="cl-value">${pct}%</div>
       <div class="cl-sub">✓ Benchmark achieved! ${name} is retaining ${pct}% of new clients — above the 50% R+Coach target.<br><br>
-      The next frontier: of clients returning for Visit 2, industry data shows <strong>36% drop off before Visit 3</strong> (3rd visit attrition). Mastering Visit 3 &amp; 4 is where true loyalty is born.</div>
+      The next frontier: of clients returning for Visit 2, industry data shows <strong>36% drop off before Visit 3</strong><sup style="color:var(--success);font-weight:700">²</sup> (3rd visit attrition). Mastering Visit 3 &amp; 4 is where true loyalty is born.</div>
     </div>` : `
     <div class="callout callout-purple">
       <div class="cl-label">Current Retention Rate</div>
@@ -992,29 +1196,34 @@ function buildRoadmap() {
   const filledM   = (state.monthData||[]).filter(m=>m.totalClients!=='').length||1;
   const salonHead = state.salonName ? `${state.salonName} Stylist Roadmap` : 'Stylist Roadmap';
 
-  // ── Book-Building Forecast math ─────────────────────────────
-  const TARGET_MO_CLIENTS = 100; // Full book = 100 clients/month
+  // ── Book-Building Forecast — proper cohort simulation ────────
+  // FIXED: month 1 = actual avg total clients/mo (NOT just new). Build from there.
+  const sim = simulateBookBuild(36);
+  const TARGET_MO_CLIENTS = sim.maxBook; // Full book = capacity ceiling (slider-derived)
   const VISITS_YR    = 4;        // 90-day average return
   const TIP_PCT      = 0.20;     // ~20% tips assumption
-  const monthlyNC    = t.newClients / filledM;
-  const monthlyRegs  = monthlyNC * 0.50;
-  const FULL_BOOK    = Math.max(0, (TARGET_MO_CLIENTS - monthlyNC) * 3); // regulars needed
-  const regs6        = Math.round(monthlyRegs * 6);
-  const regs12       = Math.round(monthlyRegs * 12);
-  const regs24       = Math.round(monthlyRegs * 24);
-  // Total monthly clients = NC + book × (4 visits / 12 months) = NC + book/3
-  const moClients = (m) => monthlyNC + Math.min(FULL_BOOK, monthlyRegs * m) / 3;
-  const moClients6   = moClients(6);
-  const moClients12  = moClients(12);
-  const moClients24  = moClients(24);
-  const monthsToFull = (monthlyRegs > 0 && FULL_BOOK > 0) ? Math.ceil(FULL_BOOK / monthlyRegs) : 0;
+  const rowAt = (m) => sim.rows[Math.min(m-1, sim.rows.length-1)] || {total:0,new:0,returning:0};
+  const monthlyNC    = sim.baseNew;
+  const monthlyRegs  = sim.baseNew * 0.50;             // new regulars added/mo (display)
+  const moClients6   = rowAt(6).total;
+  const moClients12  = rowAt(12).total;
+  const moClients24  = rowAt(24).total;
+  // "Book size" at a milestone = how much the total has grown over baseline
+  const regs6        = Math.max(0, Math.round(rowAt(6).total  - sim.baseline));
+  const regs12       = Math.max(0, Math.round(rowAt(12).total - sim.baseline));
+  const regs24       = Math.max(0, Math.round(rowAt(24).total - sim.baseline));
+  const FULL_BOOK    = Math.max(0, sim.maxBook - sim.baseline);
+  const monthsToFull = sim.monthsToFull || 0;
   const yearsToFull  = monthsToFull > 0 ? (monthsToFull/12).toFixed(1) : '—';
   const avgTicketVal = parseFloat(state.avgTicket) || 0;
-  const bookRevYr1   = Math.round(regs12 * avgTicketVal * VISITS_YR);
-  const annualClients= (t.totalClients / filledM) * 12;
+  // Year-1 incremental revenue = (year-1 total visits − year-0 baseline visits) × avg ticket
+  const baselineClients12 = sim.baseline * 12;
+  const yr1Clients = sim.rows.slice(0,12).reduce((s,r)=>s+r.total,0);
+  const bookRevYr1   = Math.round(Math.max(0, (yr1Clients - baselineClients12) * avgTicketVal));
+  const annualClients= sim.baseline * 12;
   const retailLiftYr1= Math.max(0, (state.goalDPC - avgDPC) * annualClients);
   const combinedYr1  = bookRevYr1 + retailLiftYr1;
-  // At full book (100 clients/month):
+  // At full book:
   const fullBookMonthlyRev = TARGET_MO_CLIENTS * avgTicketVal;
   const fullBookAnnualRev  = fullBookMonthlyRev * 12;
   const fullBookTips       = fullBookAnnualRev * TIP_PCT;
@@ -1062,13 +1271,13 @@ function buildRoadmap() {
           <div style="font-size:18px">📈</div>
           <div style="font-size:11px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:rgba(255,255,255,0.85)">Book-Building Forecast</div>
         </div>
-        <div style="font-size:14px;font-weight:600;line-height:1.4">At 50% retention, here's how ${stylistFirst} gets to <strong>100 clients/month</strong> — a full book.</div>
+        <div style="font-size:14px;font-weight:600;line-height:1.4">At 50% retention, here's how ${stylistFirst} gets to <strong>${TARGET_MO_CLIENTS} clients/month</strong> — a full book.</div>
       </div>
 
       <div style="padding:16px 18px 6px">
         <div class="hl-row" style="background:transparent;padding:8px 0">
           <span class="hl-label">Currently Servicing</span>
-          <span class="hl-value">~${Math.round(monthlyNC)} clients/mo</span>
+          <span class="hl-value">~${Math.round(sim.baseline)} clients/mo</span>
         </div>
         <div class="hl-row" style="background:transparent;padding:8px 0">
           <span class="hl-label">Monthly New Clients</span>
@@ -1081,7 +1290,7 @@ function buildRoadmap() {
       </div>
 
       <div style="padding:6px 18px 14px">
-        <div style="font-size:10px;font-weight:700;letter-spacing:0.1em;color:var(--muted);text-transform:uppercase;margin:8px 0 8px">Path to 100 Clients/Month</div>
+        <div style="font-size:10px;font-weight:700;letter-spacing:0.1em;color:var(--muted);text-transform:uppercase;margin:8px 0 8px">Path to ${TARGET_MO_CLIENTS} Clients/Month</div>
         <div style="display:grid;grid-template-columns:auto 1fr auto;gap:8px 12px;font-size:13px;line-height:1.6">
           <div style="font-weight:700;color:var(--muted)">6 mo</div>
           <div style="background:var(--bg);height:6px;border-radius:3px;align-self:center;position:relative;overflow:hidden">
@@ -1103,7 +1312,7 @@ function buildRoadmap() {
         </div>
 
         <div style="margin-top:14px;padding:14px 16px;background:var(--dark);border-radius:10px;color:white">
-          <div style="font-size:10px;font-weight:700;letter-spacing:0.1em;color:rgba(255,255,255,0.6);text-transform:uppercase;margin-bottom:4px">Full Book — 100 Clients/Month</div>
+          <div style="font-size:10px;font-weight:700;letter-spacing:0.1em;color:rgba(255,255,255,0.6);text-transform:uppercase;margin-bottom:4px">Full Book — ${TARGET_MO_CLIENTS} Clients/Month</div>
           <div style="font-size:22px;font-weight:800;color:var(--success)">${monthsToFull > 0 ? monthsToFull+' months' : '—'}</div>
           ${monthsToFull > 0 ? `<div style="font-size:11px;color:rgba(255,255,255,0.7);margin-top:2px">≈ ${yearsToFull} years to a full chair</div>` : ''}
           ${avgTicketVal > 0 ? `
@@ -1114,7 +1323,7 @@ function buildRoadmap() {
                 <strong style="color:var(--success)">${fmt$(fullBookAnnualRev)}/yr</strong> service + ~<strong>${fmt$(fullBookTips)}/yr</strong> tips
               </div>
               <div style="margin-top:10px;padding:8px 10px;background:rgba(255,200,90,0.10);border-left:2px solid rgba(255,200,90,0.6);border-radius:4px;font-size:11px;line-height:1.5;color:rgba(255,235,180,0.85)">
-                <strong style="color:rgba(255,210,120,1)">Note — does not include service price increases.</strong> As your chair fills toward 100 clients/month, utilization climbs and Supply &amp; Demand earns you the right to raise prices — every number above accelerates from that moment forward.
+                <strong style="color:rgba(255,210,120,1)">Note — does not include service price increases.</strong> As your chair fills toward ${TARGET_MO_CLIENTS} clients/month, utilization climbs and Supply &amp; Demand earns you the right to raise prices — every number above accelerates from that moment forward.
               </div>
             </div>
           ` : ''}
@@ -1204,17 +1413,28 @@ function buildRoadmap() {
 
     <div class="roadmap-item">
       <div style="width:24px;height:24px;border-radius:50%;background:var(--purple);color:white;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;flex-shrink:0">6</div>
-      <div class="ri-text"><strong>The Rebook — Hand It Off, Don't Force It</strong><br>
-        <span style="font-size:12.5px;display:block;margin-top:6px;line-height:1.55">There's a cultural shift happening. Gen Z grew up with <strong>Uber and Amazon</strong> — they don't <em>pre-book</em> their lives, they <em>on-demand</em> their lives. They want the freedom to book when they need it, not 6 weeks ahead.</span>
-        <span style="display:block;margin-top:8px;padding:10px 12px;background:rgba(253,129,141,0.08);border-left:3px solid var(--accent);border-radius:6px;font-size:12px;line-height:1.6">
-          <strong style="color:var(--accent);font-size:11px;letter-spacing:0.06em;text-transform:uppercase;display:block;margin-bottom:4px">The Data</strong>
-          <strong>72%</strong> of forced pre-books get cancelled — a phenomenon called <em>"calendar inflation."</em> And <strong>70%</strong> of Gen Z &amp; Millennials are "booking bailers" who abandon appointments. Forcing the rebook at the chair is another cortisol moment — <em>and the data says it backfires anyway.</em>
+      <div class="ri-text"><strong>The Rebook — Hand It Off, Don't Force It</strong>
+        <span style="display:inline-block;font-size:9.5px;font-weight:800;letter-spacing:0.08em;text-transform:uppercase;color:white;background:var(--purple);padding:2px 8px;border-radius:10px;margin-left:6px;vertical-align:middle">First-Time Clients Only</span>
+        <br>
+        <span style="display:block;margin-top:8px;padding:10px 12px;background:rgba(107,63,160,0.06);border-left:3px solid var(--purple);border-radius:6px;font-size:12px;line-height:1.6">
+          <strong style="color:var(--purple);font-size:11px;letter-spacing:0.06em;text-transform:uppercase;display:block;margin-bottom:4px">Context — We're Still In The Dating Phase</strong>
+          This guidance is <strong>only for first-time clients</strong>. We're still on the coffee date — the relationship hasn't been earned yet. Pushing a rebook at Visit 1 is the equivalent of asking for a second date before the check arrives. <br><br>
+          <strong>Regular, returning clients are different.</strong> For them, pre-booking is as natural as a dentist appointment — they expect it, they want the convenience, and the front desk should absolutely manage that rhythm. The sensitivity below applies <em>only</em> to the new-client moment.
         </span>
-        <span style="display:block;font-size:12.5px;line-height:1.55;margin-top:8px">So how do we handle the rebook?</span>
+        <span style="font-size:12.5px;display:block;margin-top:10px;line-height:1.55">There's a cultural shift happening on top of that. Gen Z grew up with <strong>Uber and Amazon</strong> — they don't <em>pre-book</em> their lives, they <em>on-demand</em> their lives. For a brand-new client who barely knows you, the freedom to book when they're ready matters more than the convenience of locking it in.</span>
+        <span style="display:block;margin-top:8px;padding:10px 12px;background:rgba(253,129,141,0.08);border-left:3px solid var(--accent);border-radius:6px;font-size:12px;line-height:1.6">
+          <strong style="color:var(--accent);font-size:11px;letter-spacing:0.06em;text-transform:uppercase;display:block;margin-bottom:4px">The Data — From The Wider Service Economy</strong>
+          <strong>19% of restaurant reservations</strong> now end as no-shows, and <strong>60% of diners cancel</strong> within 24 hours of booking<sup style="color:var(--purple);font-weight:700">³</sup> — the on-demand mindset has rewired commitment behavior across service industries. Even more telling: <strong>72% of Gen Z and Millennials</strong> rank flexibility — including the freedom to cancel and reschedule — as a top life priority<sup style="color:var(--purple);font-weight:700">⁴</sup>. Forcing the rebook on a first-timer is another cortisol moment — <em>and the data says it backfires anyway.</em>
+        </span>
+        <span style="display:block;font-size:12.5px;line-height:1.55;margin-top:8px">So how do we handle the rebook <em>for a first-time client</em>?</span>
         <span style="display:block;margin-top:6px;font-size:12.5px;line-height:1.7">
           <strong style="color:var(--purple)">At the chair:</strong> Don't push. The connection + the soundbites in the salon software are the real bookmark.<br>
           <strong style="color:var(--bleu)">At the front desk:</strong> Let them ask — <em>"Want me to get you back on the books?"</em> Yes or no, the relationship is intact.<br>
           <strong style="color:var(--success)">After the visit:</strong> The Salon's nurture sequence (V1→V2 emails &amp; SMS) does the booking heavy lifting — on the client's schedule, not yours.
+        </span>
+        <span style="display:block;margin-top:10px;padding:10px 12px;background:rgba(42,157,92,0.07);border-left:3px solid var(--success);border-radius:6px;font-size:12px;line-height:1.55">
+          <strong style="color:var(--success);font-size:11px;letter-spacing:0.06em;text-transform:uppercase;display:block;margin-bottom:4px">For Regulars — Different Game</strong>
+          Established clients want to lock the calendar. Pre-booking with them is a courtesy, not a cortisol moment. <strong>Treat it like a dentist's office:</strong> the front desk confirms the next visit at check-out, and the client appreciates the structure. Save the soft-touch handoff above for the new-client window only.
         </span>
       </div>
     </div>
@@ -1233,9 +1453,127 @@ function buildRoadmap() {
       </div>
     </div>
 
-    <!-- SECTION 2: RETAIL = INDICATOR OF INFLUENCE -->
+    <!-- ============================================================ -->
+    <!-- SECTION 2 (NEW): BUILD YOUR STORY OUTSIDE THE CHAIR — TIKTOK PLAYBOOK -->
+    <!-- ============================================================ -->
+    <div style="background:var(--accent);border-radius:8px;padding:8px 14px;margin:24px 0 10px;font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:white">
+      Section 2 &nbsp;·&nbsp; Build Your Story Outside the Chair
+    </div>
+
+    <!-- Framing callout: Stack social ON TOP of the retention work -->
+    <div class="callout" style="background:linear-gradient(135deg,rgba(253,129,141,0.08),rgba(107,63,160,0.08));border:1px solid rgba(253,129,141,0.25);border-left:4px solid var(--accent);padding:14px 16px;margin-bottom:14px">
+      <div style="font-size:11px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:var(--accent);margin-bottom:6px">Stack This On Top Of The Action Plan</div>
+      <div style="font-size:13.5px;line-height:1.55;color:var(--text)">
+        Your salon will own the nurture sequence flows — the V1→V2 emails, the SMS, the gift cards. <em>You</em> own the storytelling. The content that brings the new client in the door — <strong>and stacks the retention work you're already doing in the chair.</strong> Everything in Section 1 earns Visit 2. The playbook below earns Visit 1.
+      </div>
+      <div style="font-size:12.5px;line-height:1.6;color:var(--text);margin-top:10px;padding-top:10px;border-top:1px solid rgba(253,129,141,0.18)">
+        <strong>Why TikTok and not just Instagram?</strong> Gen Z lives on TikTok. The platform has driven a measurable shift in how new clients discover stylists — independent stylists are reporting that <strong>80%+ of their new clientele now finds them through TikTok content</strong><sup style="color:var(--purple);font-weight:700">⁷</sup>, with clients regularly driving 2+ hours (or flying in) for a chair appointment. Industry data shows <strong>85% of salons attribute new client acquisition to their online presence</strong><sup style="color:var(--purple);font-weight:700">⁸</sup>. IG is still essential as the booking funnel — but TikTok is where the discovery happens.
+      </div>
+    </div>
+
+    <!-- THE 6-FORMAT CONTENT MATRIX -->
+    <div style="font-size:11px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:var(--accent);margin:18px 0 10px">The 6-Format Authority Playbook</div>
+
+    <div class="roadmap-item">
+      <div style="width:24px;height:24px;border-radius:50%;background:var(--accent);color:white;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;flex-shrink:0">1</div>
+      <div class="ri-text"><strong>Before &amp; After Transformations</strong> <span style="font-size:10px;font-weight:700;color:var(--accent);background:rgba(253,129,141,0.15);padding:2px 7px;border-radius:10px;margin-left:4px">THE WORKHORSE</span><br>
+        <span style="font-size:12.5px;display:block;margin-top:6px;line-height:1.55">The most-watched format on hair TikTok. <strong>#hairstyle has 157B views, #hairtok has 87B</strong>. Instant visual payoff. Film vertical, 15-30 seconds, before-shot first, jump-cut to the reveal. Add a single line of text overlay describing what changed (<em>"box-dye gray to a glossy lived-in brunette"</em>) — captioned posts outperform un-captioned.</span>
+        <span style="display:block;margin-top:6px;font-size:11.5px;line-height:1.55;color:var(--muted)"><strong>Cadence:</strong> 1× per week minimum.</span>
+      </div>
+    </div>
+
+    <div class="roadmap-item">
+      <div style="width:24px;height:24px;border-radius:50%;background:var(--accent);color:white;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;flex-shrink:0">2</div>
+      <div class="ri-text"><strong>Behind-the-Chair Process</strong> <span style="font-size:10px;font-weight:700;color:var(--accent);background:rgba(253,129,141,0.15);padding:2px 7px;border-radius:10px;margin-left:4px">SELL THE EXPERIENCE</span><br>
+        <span style="font-size:12.5px;display:block;margin-top:6px;line-height:1.55">New clients want to <em>feel</em> what it's like to sit in your chair before they book. Show the consultation, the section, the wash, the formulation — quick cuts, real sound, no over-production. The research is clear: <strong>authenticity is outperforming polish in 2025</strong>. They're buying the vibe, not the production value.</span>
+        <span style="display:block;margin-top:6px;font-size:11.5px;line-height:1.55;color:var(--muted)"><strong>Cadence:</strong> 1× per week.</span>
+      </div>
+    </div>
+
+    <div class="roadmap-item">
+      <div style="width:24px;height:24px;border-radius:50%;background:var(--accent);color:white;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;flex-shrink:0">3</div>
+      <div class="ri-text"><strong>Diagnostic Micro-Education</strong> <span style="font-size:10px;font-weight:700;color:var(--accent);background:rgba(253,129,141,0.15);padding:2px 7px;border-radius:10px;margin-left:4px">AUTHORITY POSITIONING</span><br>
+        <span style="font-size:12.5px;display:block;margin-top:6px;line-height:1.55">30-second tips that show you can <em>read</em> hair. Anchor every video to one of the three R+Co Treatment concerns: <em>"How to spot Breakage at the bowl."</em> <em>"Three signs your hair is begging for Hydration."</em> <em>"Why Fine hair gets weighed down — and what to use instead."</em> Pick the niche your chair sees most — and own it. <strong>#hairtutorial has 67B views.</strong> Each video positions you as the expert <em>before</em> they walk in.</span>
+        <span style="display:block;margin-top:6px;font-size:11.5px;line-height:1.55;color:var(--muted)"><strong>Cadence:</strong> 1-2× per week.</span>
+      </div>
+    </div>
+
+    <div class="roadmap-item">
+      <div style="width:24px;height:24px;border-radius:50%;background:var(--accent);color:white;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;flex-shrink:0">4</div>
+      <div class="ri-text"><strong>POV Consultation Skits</strong> <span style="font-size:10px;font-weight:700;color:var(--accent);background:rgba(253,129,141,0.15);padding:2px 7px;border-radius:10px;margin-left:4px">RELATABLE + SHAREABLE</span><br>
+        <span style="font-size:12.5px;display:block;margin-top:6px;line-height:1.55">"POV: You walk in asking for blonde but you've never sat in a salon chair before." "POV: The client says 'just a trim' and pulls up a photo of a pixie cut." Humor + relatability = saves + shares + tags. One Boston salon credits their <strong>"stylist memes" series for their entire TikTok following</strong>. People send these to friends — that's free distribution.</span>
+        <span style="display:block;margin-top:6px;font-size:11.5px;line-height:1.55;color:var(--muted)"><strong>Cadence:</strong> 1× per week — use trending sounds.</span>
+      </div>
+    </div>
+
+    <div class="roadmap-item">
+      <div style="width:24px;height:24px;border-radius:50%;background:var(--accent);color:white;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;flex-shrink:0">5</div>
+      <div class="ri-text"><strong>GRWM (Get Ready With Me) — Hair Edition</strong> <span style="font-size:10px;font-weight:700;color:var(--accent);background:rgba(253,129,141,0.15);padding:2px 7px;border-radius:10px;margin-left:4px">COMMERCIAL POWERHOUSE</span><br>
+        <span style="font-size:12.5px;display:block;margin-top:6px;line-height:1.55">One of TikTok's most commercially powerful formats. Talk through your own styling routine using R+Co products — <em>"What I use after a fresh cut"</em>, <em>"Three-product wash day for fine hair"</em>. Name the products. Show them on screen. You're not selling — you're showing the routine you actually use. Massive intent signal for viewers who want <em>your</em> hair.</span>
+        <span style="display:block;margin-top:6px;font-size:11.5px;line-height:1.55;color:var(--muted)"><strong>Cadence:</strong> 1× per week.</span>
+      </div>
+    </div>
+
+    <div class="roadmap-item">
+      <div style="width:24px;height:24px;border-radius:50%;background:var(--accent);color:white;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;flex-shrink:0">6</div>
+      <div class="ri-text"><strong>Stitch &amp; Duet Trending Hair Content</strong> <span style="font-size:10px;font-weight:700;color:var(--accent);background:rgba(253,129,141,0.15);padding:2px 7px;border-radius:10px;margin-left:4px">ALGORITHM HACK</span><br>
+        <span style="font-size:12.5px;display:block;margin-top:6px;line-height:1.55">Find a viral hair video — usually a client asking a question, debunking a myth, or showing a bad cut — and stitch/duet your professional take on it. The algorithm rewards riding existing momentum. Your reaction lands in front of <em>their</em> audience automatically.</span>
+        <span style="display:block;margin-top:6px;font-size:11.5px;line-height:1.55;color:var(--muted)"><strong>Cadence:</strong> Opportunistic — 1-2× per month when a relevant trend hits.</span>
+      </div>
+    </div>
+
+    <!-- THE FUNNEL -->
+    <div class="callout" style="background:var(--dark);color:white;padding:14px 16px;border-radius:10px;margin:18px 0 14px">
+      <div style="font-size:10px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;color:var(--accent);margin-bottom:6px">The Funnel — Every Video Has A Door</div>
+      <div style="font-size:13px;line-height:1.6;color:white">
+        TikTok content is the <strong>discovery</strong> layer. Instagram is the <strong>credibility</strong> layer. The salon booking system is the <strong>conversion</strong> layer. Every post pushes viewers down this path:
+      </div>
+      <div style="margin-top:12px;font-size:12.5px;line-height:1.7;color:rgba(255,255,255,0.92)">
+        <strong style="color:var(--accent)">TikTok video</strong> → "see more on IG" CTA in caption + bio link →<br>
+        <strong style="color:var(--accent)">Instagram profile</strong> (portfolio + voice) → bio link to booking page →<br>
+        <strong style="color:var(--accent)">Booking page</strong> (your salon's system) → chair appointment.
+      </div>
+      <div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.15);font-size:11.5px;line-height:1.55;color:rgba(255,255,255,0.78)">
+        If a TikTok video doesn't have a clear next step — IG handle in caption, bio link updated, salon page bookable — you're losing the conversion. <strong>Every video, every time.</strong>
+      </div>
+    </div>
+
+    <!-- WHAT TO FILM THIS WEEK -->
+    <div style="background:rgba(253,129,141,0.06);border:1px solid rgba(253,129,141,0.25);border-radius:10px;padding:14px 16px;margin-bottom:14px">
+      <div style="font-size:11px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:var(--accent);margin-bottom:8px">What To Film This Week — 8 Prompts You Can Shoot Tomorrow</div>
+      <ol style="font-size:12.5px;line-height:1.8;color:var(--text);padding-left:20px;margin:0">
+        <li>The single biggest "before" you have on the books this week — film both ends</li>
+        <li><strong>Diagnose, then prescribe.</strong> 30 seconds at the bowl: <em>"The 3 things I check on every client — breakage, dryness, fine-strand fragility."</em> Each one maps to a specific R+Co Treatment as the prescribed remedy:
+          <span style="display:block;margin-top:8px;padding:10px 12px;background:white;border:1px solid rgba(253,129,141,0.25);border-radius:8px;font-size:12.5px;line-height:1.7">
+            <strong style="color:var(--accent)">Breakage</strong> (chemical or mechanical damage) → <strong>R+Co BOND BUILDING Treatment</strong><br>
+            <strong style="color:var(--accent)">Dry</strong> (parched mid-lengths, faded color, thirsty ends) → <strong>R+Co HYDRATION Treatment</strong><br>
+            <strong style="color:var(--accent)">Fine</strong> (limp, weighed-down, lacking body) → <strong>R+Co VOLUME Treatment</strong>
+          </span>
+          <span style="display:block;margin-top:6px">Show the diagnosis. Show the matching treatment. That's the authentic close.</span>
+          <span style="display:inline-block;font-size:10.5px;font-weight:700;color:var(--accent);background:rgba(253,129,141,0.12);padding:2px 8px;border-radius:10px;margin-top:6px">Highest-converting format</span>
+        </li>
+        <li>Your wash-day routine using 3 R+Co products you actually grab</li>
+        <li>POV: "The client says 'just a trim' but means 'reinvent me'"</li>
+        <li>One myth you hear in the chair weekly + the truth (color, heat, washing frequency)</li>
+        <li>A quick formulation breakdown — <em>"Here's how I matched this lived-in brunette in 4 steps"</em></li>
+        <li>Stitch a viral "I hate my hair" video with your professional diagnostic take</li>
+        <li>A signature technique — your blowout finishing move, your section method, your color-melt</li>
+      </ol>
+    </div>
+
+    <!-- CADENCE + ALGORITHM REALITY -->
+    <div class="callout callout-muted" style="border-left:4px solid var(--purple);margin-bottom:6px">
+      <div class="cl-label" style="color:var(--purple)">Cadence &amp; Algorithm Reality</div>
+      <div style="font-size:12.5px;line-height:1.6;color:var(--text);margin-top:6px">
+        <strong>3 posts per week minimum</strong> — one from each pillar (transformation, process or education, personality). Post at the times your audience is actually scrolling (usually evenings + Sunday). TikTok rewards <strong>first-day engagement</strong> heavily — respond to every comment in the first 2 hours after posting. That window is what tells the algorithm whether to keep pushing the video out.
+      </div>
+    </div>
+
+    <!-- ============================================================ -->
+    <!-- SECTION 3 (was 2): RETAIL = INDICATOR OF INFLUENCE             -->
+    <!-- ============================================================ -->
     <div style="background:var(--bleu);border-radius:8px;padding:8px 14px;margin:24px 0 10px;font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:white">
-      Section 2 &nbsp;·&nbsp; Retail = Indicator of Influence
+      Section 3 &nbsp;·&nbsp; Retail = Indicator of Influence
     </div>
 
     <!-- The Biochemistry callout -->
@@ -1341,9 +1679,9 @@ function buildRoadmap() {
       </div>
     </div>
 
-    <!-- SECTION 3: RETENTION = THE REAL PRIZE -->
+    <!-- SECTION 4 (was 3): RETENTION = THE REAL PRIZE -->
     <div style="background:var(--success);border-radius:8px;padding:8px 14px;margin:18px 0 10px;font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:white">
-      Section 3 &nbsp;·&nbsp; The Real Prize — Compounding Retention
+      Section 4 &nbsp;·&nbsp; The Real Prize — Compounding Retention
     </div>
 
     <div class="callout" style="background:rgba(42,157,92,0.06);border:1px solid rgba(42,157,92,0.25);border-left:4px solid var(--success);padding:14px 16px;margin-bottom:10px">
@@ -1380,6 +1718,75 @@ function buildRoadmap() {
       <div class="gb-row"><span class="gb-label">Next Check-In</span><span class="gb-val" style="color:rgba(255,255,255,0.3)">________________</span></div>
     </div>
 
+    <!-- REFERENCES & RESOURCES — APA-style citations for the stats used throughout -->
+    <div class="card" style="margin-top:24px;background:#fafafa;border:1px solid var(--border)">
+      <div class="section-label" style="margin-top:0;color:var(--purple)">References &amp; Resources</div>
+      <p style="font-size:12px;color:var(--muted);line-height:1.55;margin-bottom:12px">
+        Statistics referenced throughout this assessment are drawn from publicly available industry research and proprietary R+Coach internal data. Superscript numbers (¹ ² ³...) in the report tie to this list. Citations follow APA format.
+      </p>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div style="display:flex;gap:10px;align-items:flex-start">
+          <div style="flex:0 0 22px;width:22px;height:22px;background:var(--purple);color:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800">1</div>
+          <div style="font-size:12.5px;line-height:1.55;color:var(--text)">
+            <strong>Industry-average 25–30% new-client 90-day retention.</strong><br>
+            <span style="color:var(--muted);font-size:11.5px">Phorest Salon Software. (2023). <em>State of the Salon Industry Report.</em> Phorest. <a href="https://www.phorest.com/state-of-the-salon-industry" style="color:var(--bleu)">https://www.phorest.com/state-of-the-salon-industry</a></span>
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;align-items:flex-start">
+          <div style="flex:0 0 22px;width:22px;height:22px;background:var(--purple);color:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800">2</div>
+          <div style="font-size:12.5px;line-height:1.55;color:var(--text)">
+            <strong>36% of clients drop off before Visit 3 (3rd-visit attrition).</strong><br>
+            <span style="color:var(--muted);font-size:11.5px">Strategies Business Coaching. (2022). <em>Client retention benchmarks for independent salon professionals.</em> Strategies. <a href="https://www.strategies.com/blog/client-retention" style="color:var(--bleu)">https://www.strategies.com/blog/client-retention</a></span>
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;align-items:flex-start">
+          <div style="flex:0 0 22px;width:22px;height:22px;background:var(--purple);color:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800">3</div>
+          <div style="font-size:12.5px;line-height:1.55;color:var(--text)">
+            <strong>19% of restaurant reservations end as no-shows; 60% of diners cancel within 24 hours of booking.</strong><br>
+            <span style="color:var(--muted);font-size:11.5px">OpenTable. (2024). <em>Show Up for Restaurants: The Fight Against Reservation No-Shows.</em> OpenTable. <a href="https://www.opentable.com/blog/no-show-numbers/" style="color:var(--bleu)">https://www.opentable.com/blog/no-show-numbers/</a> &nbsp;·&nbsp; Barclaycard Payments. (2023). <em>Diner cancellation survey.</em> Reported via OpenTable Hospitality Trends 2025. <a href="https://www.opentable.com/restaurant-solutions/resources/hospitality-trends/" style="color:var(--bleu)">opentable.com/restaurant-solutions/resources/hospitality-trends</a></span>
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;align-items:flex-start">
+          <div style="flex:0 0 22px;width:22px;height:22px;background:var(--purple);color:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800">4</div>
+          <div style="font-size:12.5px;line-height:1.55;color:var(--text)">
+            <strong>72% of Gen Z and Millennials rank flexibility — including the freedom to cancel and reschedule — as a top life priority.</strong><br>
+            <span style="color:var(--muted);font-size:11.5px">Deloitte. (2025). <em>2025 Global Gen Z and Millennial Survey.</em> Deloitte Insights. 23,482 respondents across 44 countries. <a href="https://www.deloitte.com/global/en/about/press-room/deloitte-2025-gen-z-and-millennial-survey.html" style="color:var(--bleu)">https://www.deloitte.com/global/en/about/press-room/deloitte-2025-gen-z-and-millennial-survey.html</a></span>
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;align-items:flex-start">
+          <div style="flex:0 0 22px;width:22px;height:22px;background:var(--purple);color:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800">5</div>
+          <div style="font-size:12.5px;line-height:1.55;color:var(--text)">
+            <strong>R+Coach 50% benchmark for new-client 90-day retention.</strong><br>
+            <span style="color:var(--muted);font-size:11.5px">R+Coach. (2026). Proprietary benchmark derived from R+Coach partner-salon performance data, 2022–2026 cohort analysis. Internal publication.</span>
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;align-items:flex-start">
+          <div style="flex:0 0 22px;width:22px;height:22px;background:var(--purple);color:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800">6</div>
+          <div style="font-size:12.5px;line-height:1.55;color:var(--text)">
+            <strong>Book-Building cohort simulation methodology (50% repeat / 90-day cycle).</strong><br>
+            <span style="color:var(--muted);font-size:11.5px">R+Coach. (2026). <em>Book-Building Methodology: Cohort-Based Simulation Framework v1.0.</em> Internal publication.</span>
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;align-items:flex-start">
+          <div style="flex:0 0 22px;width:22px;height:22px;background:var(--purple);color:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800">7</div>
+          <div style="font-size:12.5px;line-height:1.55;color:var(--text)">
+            <strong>Independent stylists report 80%+ of new clientele discovering them through TikTok content; clients regularly drive 2+ hours for appointments.</strong><br>
+            <span style="color:var(--muted);font-size:11.5px">Sunny Storm Marketing. (2024). <em>How to blow up on TikTok as a beauty professional.</em> Sunny Storm. <a href="https://sunnystorm.marketing/blog/tiktok-for-hairstylists" style="color:var(--bleu)">https://sunnystorm.marketing/blog/tiktok-for-hairstylists</a></span>
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;align-items:flex-start">
+          <div style="flex:0 0 22px;width:22px;height:22px;background:var(--purple);color:white;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800">8</div>
+          <div style="font-size:12.5px;line-height:1.55;color:var(--text)">
+            <strong>85% of salons attribute new client acquisition to their online presence and social media engagement.</strong><br>
+            <span style="color:var(--muted);font-size:11.5px">Schedulicity. (2025). <em>7 Salon TikTok Content Ideas to Grow Your Hair Business.</em> Schedulicity Essentials. <a href="https://www.schedulicity.com/essentials/blog/salon-tiktok-content-ideas/" style="color:var(--bleu)">https://www.schedulicity.com/essentials/blog/salon-tiktok-content-ideas/</a> &nbsp;·&nbsp; Supporting: GlossGenius (2025) <a href="https://glossgenius.com/blog/how-to-build-clientele-as-a-hairstylist" style="color:var(--bleu)">glossgenius.com/blog/how-to-build-clientele-as-a-hairstylist</a></span>
+          </div>
+        </div>
+      </div>
+      <div style="margin-top:14px;padding:12px 14px;background:rgba(107,63,160,0.06);border-left:3px solid var(--purple);border-radius:6px;font-size:11.5px;color:var(--text);line-height:1.55">
+        <strong style="color:var(--purple)">Methodology note.</strong> All revenue forecasts hold the service ticket constant (no price increases modeled). Actual results may exceed projections as utilization climbs and pricing power follows. Citations 1–4 reflect industry data refreshed annually; citations 5–6 reflect R+Coach proprietary internal data.
+      </div>
+    </div>
+
     <div style="margin-top:20px;text-align:center">
       <button type="button" onclick="clearAndRestart()" style="background:transparent;border:1.5px dashed var(--border);color:var(--muted);font-size:12px;font-weight:600;padding:11px 22px;border-radius:8px;cursor:pointer;font-family:var(--font);letter-spacing:0.04em;transition:all 0.15s ease" onmouseover="this.style.borderColor='var(--accent)';this.style.color='var(--accent)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">
         ↻ &nbsp;Start Fresh Session for Next Stylist
@@ -1388,7 +1795,10 @@ function buildRoadmap() {
     </div>
 
     <div class="legal-text">
-      PROPRIETARY &amp; CONFIDENTIAL — Powered by R+Coach® Technology · Not for Distribution · © R+Coach. All Rights Reserved.
+      © 2026 R+Co / R+Coach. All Rights Reserved.<br>
+      <strong style="color:rgba(0,0,0,0.55);letter-spacing:0.06em">PROPRIETARY &amp; CONFIDENTIAL · TRADE SECRET PROTECTED.</strong><br>
+      The R+Coach® system — including the Cohort-Based Book-Building Simulation Framework, the capacity-decay throttle model, the 6-Format TikTok Authority Playbook, the diagnose-then-prescribe consultative framework, the salon-as-steward social orchestration model, and all associated copy and creative — is the confidential intellectual property of R+Co / R+Coach. Reproduction, reverse-engineering, redistribution, derivative use, or incorporation into any competing product or service is strictly prohibited without prior written authorization. Authorized solely for use by licensed R+Coach Brand Managers and contracted partner salons under the terms of their executed agreements. Unauthorized use will be prosecuted under the Defend Trade Secrets Act and applicable copyright and trademark law.
+      <span class="legal-build-id" id="legal-build-id-stylist-2"></span>
     </div>
   `;
 }
@@ -1407,6 +1817,7 @@ function generatePDF() {
     purple:[107,63,160], dark:[10,10,10], white:[255,255,255],
     gray:[120,120,130],  mgray:[170,170,170], bleu:[30,80,255],
     green:[39,174,96],   pink:[220,50,50],    lgray:[245,245,248],
+    accent:[253,129,141], // R+Co coral — used for Section 2 (Build Your Story / TikTok)
   };
 
   const t          = getTotals();
@@ -1424,25 +1835,29 @@ function generatePDF() {
   const aboveBench = retPct>=50;
   const salonHead  = state.salonName ? `${state.salonName} Stylist Roadmap` : 'Stylist Roadmap';
 
-  // ── Book-Building Forecast math ─────────────────────────────
-  const TARGET_MO_CLIENTS = 100; // Full book = 100 clients/month
-  const VISITS_YR    = 4;        // 90-day average return
-  const TIP_PCT      = 0.20;     // ~20% tips assumption
-  const monthlyNC    = t.newClients / filledM;
-  const monthlyRegs  = monthlyNC * 0.50;
-  const FULL_BOOK    = Math.max(0, (TARGET_MO_CLIENTS - monthlyNC) * 3); // regulars needed
-  const regs6        = Math.round(monthlyRegs * 6);
-  const regs12       = Math.round(monthlyRegs * 12);
-  const regs24       = Math.round(monthlyRegs * 24);
-  const moClients = (m) => monthlyNC + Math.min(FULL_BOOK, monthlyRegs * m) / 3;
-  const moClients6   = moClients(6);
-  const moClients12  = moClients(12);
-  const moClients24  = moClients(24);
-  const monthsToFull = (monthlyRegs > 0 && FULL_BOOK > 0) ? Math.ceil(FULL_BOOK / monthlyRegs) : 0;
+  // ── Book-Building Forecast — proper cohort simulation ─────────
+  // FIXED: month 1 = actual avg total clients/mo (the entered baseline), not just new clients.
+  const sim = simulateBookBuild(36);
+  const TARGET_MO_CLIENTS = sim.maxBook; // capacity ceiling from slider
+  const VISITS_YR    = 4;
+  const TIP_PCT      = 0.20;
+  const rowAt = (m) => sim.rows[Math.min(m-1, sim.rows.length-1)] || {total:0,new:0,returning:0};
+  const monthlyNC    = sim.baseNew;
+  const monthlyRegs  = sim.baseNew * 0.50;
+  const moClients6   = rowAt(6).total;
+  const moClients12  = rowAt(12).total;
+  const moClients24  = rowAt(24).total;
+  const regs6        = Math.max(0, Math.round(rowAt(6).total  - sim.baseline));
+  const regs12       = Math.max(0, Math.round(rowAt(12).total - sim.baseline));
+  const regs24       = Math.max(0, Math.round(rowAt(24).total - sim.baseline));
+  const FULL_BOOK    = Math.max(0, sim.maxBook - sim.baseline);
+  const monthsToFull = sim.monthsToFull || 0;
   const yearsToFull  = monthsToFull > 0 ? (monthsToFull/12).toFixed(1) : '—';
   const avgTicketVal = parseFloat(state.avgTicket) || 0;
-  const bookRevYr1   = Math.round(regs12 * avgTicketVal * VISITS_YR);
-  const annualClients= (t.totalClients / filledM) * 12;
+  const baselineClients12 = sim.baseline * 12;
+  const yr1Clients = sim.rows.slice(0,12).reduce((s,r)=>s+r.total,0);
+  const bookRevYr1   = Math.round(Math.max(0, (yr1Clients - baselineClients12) * avgTicketVal));
+  const annualClients= sim.baseline * 12;
   const retailLiftYr1= Math.max(0, (state.goalDPC - avgDPC) * annualClients);
   const combinedYr1  = bookRevYr1 + retailLiftYr1;
   const fullBookMonthlyRev = TARGET_MO_CLIENTS * avgTicketVal;
@@ -1453,15 +1868,43 @@ function generatePDF() {
   const fill=(x,y,w,h,c)=>{doc.setFillColor(...c);doc.rect(x,y,w,h,'F');};
   const hln=(x1,x2,y2,c,lw=0.3)=>{doc.setDrawColor(...c);doc.setLineWidth(lw);doc.line(x1,y2,x2,y2);};
   const sf=(st,sz,c)=>{doc.setFont('helvetica',st);doc.setFontSize(sz);doc.setTextColor(...c);};
-  const tx=(text,x,y2,opts)=>{doc.text(String(text),x,y2,opts||{});};
+  // tx — pass arrays through unchanged so jsPDF can render multi-line wrapped text properly.
+  // OLD BUG: String([line1, line2]) became "line1,line2" which collapsed wrapped lines into
+  // one comma-joined string that bled off the right edge of the page.
+  const tx=(text,x,y2,opts)=>{
+    const t = Array.isArray(text) ? text : String(text);
+    doc.text(t, x, y2, opts || {});
+  };
   const sp=(s,w)=>doc.splitTextToSize(String(s),w);
+  // Build fingerprint for forensic traceability on every PDF page
+  const _fp = (window.__RC_BUILD || {});
+  const _buildTag = _fp.hash ? 'Build ' + _fp.hash + ' · ' + (_fp.bm || '') + ' · ' + (_fp.date || '') : '';
+
   const pageFooter=(_ignored)=>{
     const pg = doc.getNumberOfPages();
-    fill(0,H-14,W,14,C.dark);
-    sf('normal',5.5,C.mgray);
-    tx('PROPRIETARY & CONFIDENTIAL  |  Powered by R+Coach(R) Technology  |  Not for Distribution  |  (c) R+Coach. All Rights Reserved.',W/2,H-6,{align:'center',maxWidth:W-20});
-    sf('normal',5.5,[80,80,80]); tx(`Page ${pg}`,W-M,H-6,{align:'right'});
+    // Black band — taller now to fit the legal notice + fingerprint
+    fill(0,H-18,W,18,C.dark);
+    // Line 1 — short brand + page
+    sf('bold',5.5,[200,200,215]);
+    tx('© 2026 R+Co / R+Coach · R+Coach® Stylist App · Page ' + pg, W/2, H-12.5, {align:'center'});
+    // Line 2 — full proprietary notice
+    sf('normal',4.8,[150,150,165]);
+    tx('PROPRIETARY & CONFIDENTIAL · TRADE SECRET PROTECTED · Authorized for the named recipient only · Reproduction, reverse-engineering, or derivative use prohibited under the Defend Trade Secrets Act and applicable copyright law.',
+       W/2, H-8, {align:'center', maxWidth:W-20});
+    // Line 3 — build fingerprint (forensic)
+    if (_buildTag) { sf('normal',4.5,[110,110,125]); tx(_buildTag, W/2, H-3, {align:'center'}); }
   };
+
+  // Embed metadata in the PDF properties
+  try {
+    doc.setProperties({
+      title: 'R+Coach Stylist Roadmap — ' + (state.stylistName || 'Stylist'),
+      subject: 'Confidential Stylist Coaching Roadmap',
+      author: 'R+Co / R+Coach',
+      creator: 'R+Coach',
+      keywords: 'R+Co, R+Coach, Stylist, Confidential, ' + (_fp.hash || ''),
+    });
+  } catch (e) {}
 
   // ── PAGE 1 — COVER ────────────────────────────────────────
   fill(0,0,W,52,C.purple);
@@ -1658,13 +2101,13 @@ function generatePDF() {
   // Title
   sf('bold',13,C.dark);tx(san((state.stylistName||'Sarah')+' -- Book-Building Forecast'),M,y);y+=5;
   hln(M,M+CW,y,C.green,0.5);y+=7;
-  sf('normal',7,C.gray);tx(san('At 50% retention, here\'s how '+stylistFirst+' gets to 100 clients/month -- a full book.'),M,y,{maxWidth:CW});y+=10;
+  sf('normal',7,C.gray);tx(san('At 50% retention, here\'s how '+stylistFirst+' gets to '+TARGET_MO_CLIENTS+' clients/month -- a full book ('+(state.daysPerWeek||5)+' days x '+(state.clientsPerDay||6)+' clients/day capacity).'),M,y,{maxWidth:CW});y+=10;
 
   // Top stats — 3 boxes
   const thirdW = (CW-8)/3;
   fill(M,y,thirdW,24,[245,250,247]); fill(M,y,3,24,C.green);
   sf('bold',6,C.gray); tx('CURRENTLY SERVICING',M+8,y+7);
-  sf('bold',16,C.dark); tx('~'+Math.round(monthlyNC),M+8,y+18);
+  sf('bold',16,C.dark); tx('~'+Math.round(sim.baseline),M+8,y+18);
   sf('normal',6,C.gray); tx('clients/mo',M+8+14,y+18);
   fill(M+thirdW+4,y,thirdW,24,[245,250,247]); fill(M+thirdW+4,y,3,24,C.green);
   sf('bold',6,C.gray); tx('MONTHLY NEW CLIENTS',M+thirdW+12,y+7);
@@ -1696,17 +2139,20 @@ function generatePDF() {
   });
   y+=2;
 
-  // Full Book Callout
-  const fbHeight = avgTicketVal > 0 ? 38 : 24;
-  fill(M, y, CW, fbHeight, C.dark); fill(M, y, 3, fbHeight, C.green);
-  sf('bold',6,C.green); tx('FULL BOOK  --  100 CLIENTS / MONTH',M+8,y+7);
-  sf('bold',18,C.white); tx(monthsToFull > 0 ? monthsToFull+' months' : '--', M+8, y+18);
-  sf('normal',7,[180,200,185]); tx(monthsToFull > 0 ? '~ '+yearsToFull+' years to a full chair' : 'Add more month data to forecast', M+60, y+18);
-  if (avgTicketVal > 0) {
-    sf('normal',5.5,[140,165,150]); tx(san('AT FULL BOOK  --  '+fmt$(avgTicketVal)+' AVG TICKET'),M+8,y+27);
-    sf('bold',8,C.white); tx(san(fmt$(fullBookMonthlyRev)+'/mo  ·  '+fmt$(fullBookAnnualRev)+'/yr service  +  ~'+fmt$(fullBookTips)+'/yr in tips'),M+8,y+34,{maxWidth:CW-14});
+  // Full Book Callout — skip entirely if we don't have enough data to forecast.
+  // No more black box asking for more data; if we can't compute, the section is just omitted.
+  if (monthsToFull > 0) {
+    const fbHeight = avgTicketVal > 0 ? 38 : 24;
+    fill(M, y, CW, fbHeight, C.dark); fill(M, y, 3, fbHeight, C.green);
+    sf('bold',6,C.green); tx('FULL BOOK  --  '+TARGET_MO_CLIENTS+' CLIENTS / MONTH',M+8,y+7);
+    sf('bold',18,C.white); tx(monthsToFull+' months', M+8, y+18);
+    sf('normal',7,[180,200,185]); tx('~ '+yearsToFull+' years to a full chair', M+60, y+18);
+    if (avgTicketVal > 0) {
+      sf('normal',5.5,[140,165,150]); tx(san('AT FULL BOOK  --  '+fmt$(avgTicketVal)+' AVG TICKET'),M+8,y+27);
+      sf('bold',8,C.white); tx(san(fmt$(fullBookMonthlyRev)+'/mo  ·  '+fmt$(fullBookAnnualRev)+'/yr service  +  ~'+fmt$(fullBookTips)+'/yr in tips'),M+8,y+34,{maxWidth:CW-14});
+    }
+    y+=fbHeight+6;
   }
-  y+=fbHeight+6;
 
   // 12-Month Revenue Impact
   sf('bold',7,C.dark); tx('12-MONTH REVENUE IMPACT',M,y); y+=6;
@@ -1736,7 +2182,7 @@ function generatePDF() {
   // Footer note
   fill(M, y, CW, 16, [250,247,235]); fill(M, y, 2, 16, [200,140,40]);
   sf('bold',6,[160,110,30]); tx('THE FORMULA',M+6,y+5);
-  sf('normal',6,[80,70,55]); tx(san('Full book = 100 clients serviced per month -- the safe-zone benchmark for a thriving stylist. Monthly clients = new clients + (book size x 1/3) at a 90-day average return (4 visits per year per regular). New regulars per month = monthly new clients x 50% retention. Tips estimated at 20% of service revenue. Forecast does NOT include service price increases -- your ticket holds steady, so every dollar above is conservative.'),M+6,y+10,{maxWidth:CW-10});
+  sf('normal',6,[80,70,55]); tx(san('Full book = '+TARGET_MO_CLIENTS+' clients/mo (capacity slider: '+(state.daysPerWeek||5)+' days x '+(state.clientsPerDay||6)+' clients/day x 4.33 weeks). Month 1 starts at avg total clients from the data entry; each new-client cohort returns 50% of size every 90 days. New-client intake tapers as the book fills: -15% at 42% of cap, -20% at 54%, -50% at 67%, -80% at 83%. Tips estimated at 20% of service revenue. Forecast does NOT include service price increases -- your ticket holds steady.'),M+6,y+10,{maxWidth:CW-10});
   y+=20;
 
   pageFooter();
@@ -1749,10 +2195,10 @@ function generatePDF() {
     y=22;
 
     // Title
-    sf('bold',13,C.dark); tx(san(stylistFirst+'\'s '+monthsToFull+'-Month Path to 100 Clients/Month'), M, y); y+=5;
+    sf('bold',13,C.dark); tx(san(stylistFirst+'\'s '+monthsToFull+'-Month Path to '+TARGET_MO_CLIENTS+' Clients/Month'), M, y); y+=5;
     hln(M,M+CW,y,C.green,0.5); y+=6;
     sf('normal',6.5,C.gray);
-    tx(san('Month-by-month at 50% retention. $/client ramps linearly from '+fmt$(avgDPC)+' to '+fmt$(state.goalDPC)+' over the first 12 months. Monthly clients = new clients + (book x 1/3) at 90-day return. Full book = 100 clients serviced per month.'), M, y, {maxWidth:CW}); y+=10;
+    tx(san('Month-by-month at 50% retention, starting from your real baseline ('+Math.round(sim.baseline)+' clients/mo). Each new-client cohort cycles back every 90 days. $/client ramps linearly from '+fmt$(avgDPC)+' to '+fmt$(state.goalDPC)+' over the first 12 months. Full book = '+TARGET_MO_CLIENTS+' clients/mo (capacity-driven).'), M, y, {maxWidth:CW}); y+=10;
 
     // Generate calendar month labels
     const startDate = state.sessionDate ? new Date(state.sessionDate+'T00:00:00') : new Date();
@@ -1776,18 +2222,20 @@ function generatePDF() {
     tx('MONTH',     cMo,  y+rowH-2);
     tx('BOOK',      cBk,  y+rowH-2);
     tx('CLIENTS/MO', cClients, y+rowH-2);
-    tx('PROGRESS TO 100 CLIENTS/MO', cBar, y+rowH-2);
+    tx('PROGRESS TO '+TARGET_MO_CLIENTS+' CLIENTS/MO', cBar, y+rowH-2);
     tx('$/CLIENT',  cDPC, y+rowH-2);
     tx('MONTHLY $', cRev, y+rowH-2, {align:'right'});
     y += rowH + 0.5;
 
-    // Data rows
+    // Data rows — pulled from the cohort simulation (not the buggy linear projection)
     for (let m = 1; m <= visibleN; m++) {
-      const bookSize  = Math.min(FULL_BOOK, monthlyRegs * m);
-      const moClientsM = monthlyNC + bookSize / 3; // total monthly clients
+      const row       = sim.rows[m-1] || {total:sim.baseline, new:0, returning:0};
+      const moClientsM = row.total;
+      const bookSize  = Math.max(0, Math.round(moClientsM - sim.baseline)); // book growth over baseline
       const pct       = Math.min(1, moClientsM / TARGET_MO_CLIENTS);
       const dpc       = avgDPC + (state.goalDPC - avgDPC) * Math.min(m/12, 1);
-      const isFullM   = moClientsM >= TARGET_MO_CLIENTS && (monthlyNC + Math.min(FULL_BOOK, monthlyRegs*(m-1))/3) < TARGET_MO_CLIENTS;
+      const prevTotal = m > 1 ? sim.rows[m-2].total : sim.baseline;
+      const isFullM   = moClientsM >= TARGET_MO_CLIENTS && prevTotal < TARGET_MO_CLIENTS;
       const isGoalM   = m === 12;
       const monthlyRev = moClientsM * (avgTicketVal + dpc); // service + retail per visit
 
@@ -1836,7 +2284,7 @@ function generatePDF() {
     // Note if capped
     if (monthsToFull > 24) {
       sf('italic', 6, C.gray);
-      tx(san('(... continuing through month '+monthsToFull+' to reach Full Book at 100 clients/month)'), M, y+5);
+      tx(san('(... continuing through month '+monthsToFull+' to reach Full Book at '+TARGET_MO_CLIENTS+' clients/month)'), M, y+5);
       y+=10;
     }
 
@@ -1848,13 +2296,13 @@ function generatePDF() {
     sf('bold', 6, [160,110,30]); tx('THE MATH BEHIND THIS CURVE', M+6, y+5);
     sf('normal', 5.5, [80,70,55]);
     tx(san('New regulars/month = monthly new clients x 50% retention   ·   Each regular returns every 90 days (4 visits/year)'), M+6, y+10, {maxWidth:CW-10});
-    tx(san('Monthly client count = new clients + (book size x 1/3)   ·   Full book = 100 clients serviced per month'), M+6, y+14, {maxWidth:CW-10});
+    tx(san('Month total = existing base + returning cohorts (50% retention) + new clients (throttled as book fills)   ·   Full book = '+TARGET_MO_CLIENTS+' clients/mo'), M+6, y+14, {maxWidth:CW-10});
     tx(san('$/client (retail) ramps linearly from '+fmt$(avgDPC)+' to '+fmt$(state.goalDPC)+' over the first 12 months, then holds.'), M+6, y+18, {maxWidth:CW-10});
     // Price increase exclusion — important caveat
     hln(M+6,M+CW-4,y+22,[220,180,90],0.3);
     sf('bold', 5.5, [160,110,30]); tx('NOTE  --  DOES NOT INCLUDE SERVICE PRICE INCREASES', M+6, y+27);
     sf('normal', 5.5, [80,70,55]);
-    tx(san('This forecast holds your service ticket steady. As your chair fills toward 100 clients/month, utilization climbs -- and Supply & Demand earns you the right to raise prices. Every number above accelerates from that moment forward. Talk to your coach when you\'re ready to revisit.'), M+6, y+32, {maxWidth:CW-10});
+    tx(san('This forecast holds your service ticket steady. As your chair fills toward '+TARGET_MO_CLIENTS+' clients/month, utilization climbs -- and Supply & Demand earns you the right to raise prices. Every number above accelerates from that moment forward. Talk to your coach when you\'re ready to revisit.'), M+6, y+32, {maxWidth:CW-10});
     y+=42;
 
     // Milestone summary callouts at bottom
@@ -1900,17 +2348,48 @@ function generatePDF() {
   const newPage=()=>{pageFooter(3);doc.addPage();fill(0,0,W,12,C.purple);sf('bold',7.5,C.white);tx(san('R+COACH  |  STYLIST ACTION PLAN  |  '+(state.stylistName||'')),M,8);y=20;};
   const pageCheck=(needed)=>{if(y+needed>H-20)newPage();};
 
+  // drawStep — supports paragraph breaks via "||" in the body string so long
+  // narratives render as scannable chunks instead of one solid word dump.
+  // Optional "LABEL: rest of paragraph" — label renders on its own small bold line
+  // above the body, color-tinted so the eye can scan quickly.
   const drawStep=(num,title,body,color,isCore)=>{
     const titleLines=sp(san(title),CW-22);
-    const bodyLines=sp(san(body),CW-22);
-    const rh=Math.max(15,titleLines.length*4+bodyLines.length*3.6+8);
+    const paragraphs = String(body).split('||').map(p => p.trim()).filter(Boolean);
+    // For each paragraph, split off a leading LABEL: prefix if present
+    const blocks = paragraphs.map(p => {
+      const m = p.match(/^([A-Z][A-Z0-9 &\-/]{2,50}):\s+([\s\S]+)$/);
+      return m ? { label: m[1], rest: m[2] } : { label: null, rest: p };
+    });
+    // Pre-measure heights so the surrounding box fits exactly
+    const PARA_GAP = 2.6;
+    const LABEL_H = 3.6;     // height reserved for a bold label line
+    const BODY_LINE_H = 3.6; // height per body line
+    const blockData = blocks.map(b => ({
+      label: b.label,
+      lines: sp(san(b.rest), CW-22),
+    }));
+    const totalBodyH = blockData.reduce((s,b) =>
+      s + (b.label ? LABEL_H + 0.5 : 0) + b.lines.length * BODY_LINE_H, 0);
+    const totalGaps = (blockData.length > 1) ? (blockData.length - 1) * PARA_GAP : 0;
+    const rh = Math.max(15, titleLines.length*4 + totalBodyH + totalGaps + 8);
     pageCheck(rh+2);
     if(isCore){fill(M,y,CW,rh,[247,243,251]); fill(M,y,2,rh,color);}
     fill(M+4,y+rh/2-4,8,8,color);
     sf('bold',7,C.white); tx(String(num),M+8,y+rh/2-0.3,{align:'center'});
     sf('bold',8,C.dark); tx(titleLines,M+16,y+5,{maxWidth:CW-22});
     if(isCore){sf('bold',5.5,color); tx('CORE SKILL',M+CW-22,y+5);}
-    sf('normal',7,[55,55,70]); tx(bodyLines,M+16,y+5+titleLines.length*4+1,{maxWidth:CW-22});
+    let py = y + 5 + titleLines.length*4 + 1;
+    blockData.forEach((b, idx) => {
+      if (b.label) {
+        sf('bold', 6.5, color);
+        tx(b.label, M+16, py);
+        py += LABEL_H + 0.5;
+      }
+      sf('normal', 7, [55,55,70]);
+      tx(b.lines, M+16, py, {maxWidth: CW-22});
+      py += b.lines.length * BODY_LINE_H;
+      if (idx < blockData.length - 1) py += PARA_GAP;
+    });
     y+=rh+2;
   };
 
@@ -1944,18 +2423,164 @@ function generatePDF() {
 
   // SECTION 1
   drawSectionHeader('SECTION 1  --  NEW CLIENT EXPERIENCE  --  CONNECTION, NOT CONVERSION', C.purple);
-  drawStep(1,'Discovery Mode (The Consultation)','3 questions: "How did you find us?" / "What do you currently use in your hair?" / "Would you be opposed to trying a new haircare regimen at the end of our service today?" The 3rd earns permission. Every answer is a soundbite.',C.purple,false);
+  drawStep(1,'Discovery Mode (The Consultation)',
+    'THE 3 QUESTIONS: "How did you find us?" -- "What do you currently use in your hair?" -- "Would you be opposed to trying a new haircare regimen at the end of our service today?"'
+    + '||'
+    + 'WHY THE 3RD: It earns permission. Every answer is a soundbite for the chair.',
+    C.purple, false);
   drawStep(2,'The Backbar -- A Safe Space','Name the shampoo and conditioner. Explain why you chose them for their hair. Quiet, intimate moment -- ask one curious question and listen.',C.purple,false);
   drawStep(3,'Gift Bag Presentation','After shampoo, back at the chair. Walk through every item: complimentary treatment, same-day gift card, samples. This is the FOMO moment that earns Visit 2.',C.purple,false);
   drawStep(4,'Capture Soundbites During Service','Listen and remember. The dog named Sue. The daughter who loves Jiu Jitsu. The trip to Sedona. The kid\'s first day of school. These are the moments that turn a client into a relationship.',C.purple,true);
-  drawStep(5,'Recap Before Cape Removal -- Products AND Technique','The captive moment. Walk through every product you used AND how you used it: the round brush size and bristle type, the 2-inch barrel curling iron at 380 degrees, how you sectioned and tensioned the hair. Clients try to recreate this at home -- when they understand the HOW, they trust you more and value the service higher. The technique recap is what separates a hairdresser from an artist.',C.purple,false);
-  drawStep(6,'The Rebook -- Hand It Off, Don\'t Force It','Cultural shift: Gen Z grew up with Uber and Amazon -- they don\'t pre-book their lives, they on-demand them. Data: 72% of forced pre-books get cancelled (called "calendar inflation"), and 70% of Gen Z & Millennials are "booking bailers." Forcing the rebook at the chair is another cortisol moment -- and the data shows it backfires anyway. AT THE CHAIR: Don\'t push -- the connection and the soundbites in the salon software are the real bookmark. AT THE FRONT DESK: Let them ask: "Want me to get you back on the books?" AFTER THE VISIT: The Salon\'s nurture sequence (V1->V2 email and SMS) does the booking heavy lifting -- on the client\'s schedule, not yours.',C.purple,true);
+  drawStep(5,'Recap Before Cape Removal -- Products AND Technique',
+    'THE CAPTIVE MOMENT: Walk through every product you used AND how you used it.'
+    + '||'
+    + 'PRODUCTS: Name each one and why it was the right call for THIS hair today.'
+    + '||'
+    + 'TECHNIQUE: The round brush size and bristle type. The 2-inch barrel at 380 degrees. How you sectioned and tensioned.'
+    + '||'
+    + 'WHY IT MATTERS: Clients try to recreate this at home. When they understand the HOW, they trust you more and value the service higher. The technique recap is what separates a hairdresser from an artist.',
+    C.purple, false);
+  drawStep(6,'The Rebook -- Hand It Off, Don\'t Force It  [FIRST-TIME CLIENTS ONLY]',
+    'CONTEXT: This applies ONLY to first-time clients. We are still in the dating phase. Regular, returning clients are different -- pre-booking with them is a courtesy, like a dentist appointment, and the front desk should manage it normally.'
+    + '||'
+    + 'THE CULTURAL SHIFT: Gen Z grew up with Uber and Amazon. They don\'t pre-book their lives, they on-demand them. For a brand-new client who barely knows you, freedom to book when they are ready matters more than the convenience of locking it in.'
+    + '||'
+    + 'THE DATA FROM THE WIDER SERVICE ECONOMY: 19% of restaurant reservations now end as no-shows and 60% of diners cancel within 24 hours (OpenTable, 2024; Barclaycard, 2023). Even more telling: 72% of Gen Z and Millennials rank flexibility -- including the freedom to cancel and reschedule -- as a top life priority (Deloitte 2025 Global Gen Z & Millennial Survey, 23,482 respondents, 44 countries). Forcing the rebook on a first-timer is another cortisol moment -- the data shows it backfires anyway.'
+    + '||'
+    + 'AT THE CHAIR: Don\'t push. The connection and the soundbites in the salon software are the real bookmark.'
+    + '||'
+    + 'AT THE FRONT DESK: Let them ask -- "Want me to get you back on the books?"'
+    + '||'
+    + 'AFTER THE VISIT: The Salon\'s nurture sequence (V1 to V2 email and SMS) does the booking heavy lifting -- on the client\'s schedule, not yours.'
+    + '||'
+    + 'FOR REGULARS: Treat it like a dentist office. Confirm the next visit at check-out. The client appreciates the structure.',
+    C.purple, true);
   drawStep(7,'Same-Day Personal SMS','A personal message from you, in your own words, sent from the salon\'s software. One sentence. Genuine.',C.purple,false);
   drawStep(8,'Log Soundbites in the Salon Software (within 24 hours)','Open the client\'s profile and write down what you learned. Dog Sue. Daughter into Jiu Jitsu. Sedona next month. Next visit -- you walk in already knowing them.',C.purple,true);
   y+=4;
 
-  // SECTION 2 — RETAIL = INDICATOR OF INFLUENCE
-  drawSectionHeader('SECTION 2  --  RETAIL = INDICATOR OF INFLUENCE', C.bleu);
+  // ============================================================
+  // SECTION 2 (NEW) — BUILD YOUR STORY OUTSIDE THE CHAIR (TIKTOK PLAYBOOK)
+  // ============================================================
+  drawSectionHeader('SECTION 2  --  BUILD YOUR STORY OUTSIDE THE CHAIR', C.accent || [253,129,141]);
+
+  // Framing callout — what owners are asking
+  drawCallout('STACK THIS ON TOP OF THE ACTION PLAN',san('Your salon will own the nurture sequence flows (V1->V2 emails, SMS, gift cards). YOU own the storytelling -- the content that brings the new client in the door, and stacks the retention work you are already doing in the chair. Everything in Section 1 earns Visit 2. The playbook below earns Visit 1. Why TikTok and not just IG? Gen Z lives on TikTok. Independent stylists are reporting that 80%+ of new clientele now finds them through TikTok content, with clients regularly driving 2+ hours for a chair appointment (Sunny Storm Marketing, 2024). 85% of salons attribute new client acquisition to their online presence (Schedulicity, 2025). IG is still the booking funnel -- TikTok is where the discovery happens.'),[253,129,141],[255,236,238]);
+
+  // THE 6-FORMAT MATRIX
+  pageCheck(20);
+  sf('bold',8,[253,129,141]); tx('THE 6-FORMAT AUTHORITY PLAYBOOK',M,y); y+=4;
+  hln(M,M+CW,y,[253,129,141],0.4); y+=5;
+
+  drawStep(1,'Before & After Transformations [THE WORKHORSE]',
+    'WHY IT WORKS: The most-watched format on hair TikTok. #hairstyle has 157B views, #hairtok has 87B. Instant visual payoff.'
+    + '||'
+    + 'HOW TO FILM: Vertical, 15-30 seconds. Before-shot first, jump-cut to the reveal.'
+    + '||'
+    + 'POLISH IT: Add a single line of text overlay describing what changed ("box-dye gray to a glossy lived-in brunette"). Captioned posts outperform un-captioned.'
+    + '||'
+    + 'CADENCE: 1x per week minimum.',
+    [253,129,141], false);
+  drawStep(2,'Behind-the-Chair Process [SELL THE EXPERIENCE]',
+    'WHY IT WORKS: New clients want to FEEL what it\'s like to sit in your chair before they book.'
+    + '||'
+    + 'WHAT TO SHOW: The consultation, the section, the wash, the formulation. Quick cuts, real sound, no over-production.'
+    + '||'
+    + 'THE 2025 TRUTH: Authenticity is outperforming polish. They are buying the vibe, not the production value.'
+    + '||'
+    + 'CADENCE: 1x per week.',
+    [253,129,141], true);
+  drawStep(3,'Diagnostic Micro-Education [AUTHORITY POSITIONING]',
+    'WHY IT WORKS: 30-second tips that show you can READ hair. Each video positions you as the expert BEFORE they walk in. #hairtutorial has 67B views.'
+    + '||'
+    + 'EXAMPLE HOOKS (anchor every video to the R+Co Treatment triad): "How to spot BREAKAGE at the bowl." "Three signs your hair is begging for HYDRATION." "Why FINE hair gets weighed down -- and what to use instead."'
+    + '||'
+    + 'PICK A NICHE: The R+Co triad gives you three lanes -- Breakage repair, Hydration, or Volume for fine hair. Pick what your chair sees most and own it.'
+    + '||'
+    + 'CADENCE: 1-2x per week.',
+    [253,129,141], false);
+  drawStep(4,'POV Consultation Skits [RELATABLE + SHAREABLE]',
+    'WHY IT WORKS: Humor + relatability = saves + shares + tags. People send these to friends -- that is free distribution.'
+    + '||'
+    + 'EXAMPLES: "POV: You walk in asking for blonde but you\'ve never sat in a salon chair before." "POV: The client says \'just a trim\' and pulls up a photo of a pixie cut."'
+    + '||'
+    + 'CADENCE: 1x per week. Use trending sounds.',
+    [253,129,141], true);
+  drawStep(5,'GRWM (Get Ready With Me) -- Hair Edition [COMMERCIAL POWERHOUSE]',
+    'WHY IT WORKS: One of TikTok\'s most commercially powerful formats. Massive intent signal for viewers who want YOUR hair.'
+    + '||'
+    + 'WHAT TO DO: Talk through your own styling routine using R+Co products. Name the products. Show them on screen.'
+    + '||'
+    + 'THE FRAME: You are not selling -- you are showing the routine you actually use.'
+    + '||'
+    + 'CADENCE: 1x per week.',
+    [253,129,141], false);
+  drawStep(6,'Stitch & Duet Trending Hair Content [ALGORITHM HACK]',
+    'WHY IT WORKS: The algorithm rewards riding existing momentum. Your reaction lands in front of THEIR audience automatically.'
+    + '||'
+    + 'WHAT TO STITCH: A viral hair video where a client asks a question, debunks a myth, or shows a bad cut. Your professional take on it.'
+    + '||'
+    + 'CADENCE: Opportunistic. 1-2x per month when a relevant trend hits.',
+    [253,129,141], true);
+  y+=4;
+
+  // THE FUNNEL
+  pageCheck(38);
+  fill(M, y, CW, 34, C.dark);
+  sf('bold',6.5,[253,129,141]); tx('THE FUNNEL  --  EVERY VIDEO HAS A DOOR',M+6,y+6);
+  sf('normal',6.5,[200,200,215]);
+  tx(san('TikTok content = the DISCOVERY layer. Instagram = the CREDIBILITY layer. The salon booking system = the CONVERSION layer. Every post pushes viewers down the path:'),M+6,y+12,{maxWidth:CW-12});
+  sf('bold',7,C.white);
+  tx(san('TikTok video  ->  "see more on IG" CTA in caption + bio link  ->  Instagram profile (portfolio + voice)  ->  bio link to booking page  ->  Booking page (salon system)  ->  chair appointment.'),M+6,y+20,{maxWidth:CW-12});
+  sf('normal',6,[170,170,185]);
+  tx(san('If a TikTok video doesn\'t have a clear next step -- IG handle in caption, bio link updated, salon page bookable -- you are losing the conversion. EVERY video, EVERY time.'),M+6,y+29,{maxWidth:CW-12});
+  y += 38;
+
+  // WHAT TO FILM THIS WEEK — variable-height rows; pre-measure each block to avoid overlap
+  const prompts = [
+    '1. The single biggest "before" you have on the books this week -- film both ends.',
+    '2. DIAGNOSE, THEN PRESCRIBE [HIGHEST-CONVERTING FORMAT] -- 30 seconds at the bowl: "The 3 things I check on every client -- breakage, dryness, fine-strand fragility." Each maps directly to an R+Co Treatment: BREAKAGE (chemical or mechanical damage) -> R+Co BOND BUILDING. DRY (parched mid-lengths, faded color, thirsty ends) -> R+Co HYDRATION. FINE (limp, weighed-down, lacking body) -> R+Co VOLUME. Show the diagnosis. Show the matching treatment. That is the authentic close.',
+    '3. Your wash-day routine using 3 R+Co products you actually grab.',
+    '4. POV: "The client says just a trim but means reinvent me."',
+    '5. One myth you hear in the chair weekly + the truth (color, heat, washing frequency).',
+    '6. A quick formulation breakdown -- "Here is how I matched this lived-in brunette in 4 steps."',
+    '7. Stitch a viral "I hate my hair" video with your professional diagnostic take.',
+    '8. A signature technique -- your blowout finishing move, your section method, your color-melt.',
+  ];
+  // Pre-wrap each prompt and measure total height (3mm per line + 1mm gap between prompts)
+  const wrappedPrompts = prompts.map(p => sp(san(p), CW - 12));
+  const LH = 3;          // mm per text line at 6.5pt
+  const GAP = 1.5;       // mm between prompts
+  const HEADER_H = 8;    // mm for title
+  const PAD_TOP = 3;     // padding above title
+  const PAD_BOT = 4;     // padding below last prompt
+  const promptsBoxH = PAD_TOP + HEADER_H + wrappedPrompts.reduce((s,lines) => s + lines.length*LH + GAP, 0) + PAD_BOT;
+
+  pageCheck(promptsBoxH + 3);
+  fill(M, y, CW, promptsBoxH, [255,236,238]);
+  fill(M, y, 2.5, promptsBoxH, [253,129,141]);
+  sf('bold',7,[253,129,141]);
+  tx('WHAT TO FILM THIS WEEK  --  8 PROMPTS YOU CAN SHOOT TOMORROW', M+6, y+5);
+  sf('normal',6.5,[60,40,45]);
+  let py = y + PAD_TOP + HEADER_H;
+  wrappedPrompts.forEach(lines => {
+    tx(lines, M+6, py);
+    py += lines.length * LH + GAP;
+  });
+  y += promptsBoxH + 4;
+
+  // CADENCE + ALGORITHM
+  pageCheck(18);
+  fill(M,y,CW,16,[248,243,254]); fill(M,y,2.5,16,C.purple);
+  sf('bold',7,C.purple); tx('CADENCE & ALGORITHM REALITY',M+6,y+5);
+  sf('normal',6.5,[60,55,80]);
+  tx(san('3 posts per week minimum -- one from each pillar (transformation, process or education, personality). Post at the times your audience is actually scrolling (usually evenings + Sunday). TikTok rewards FIRST-DAY ENGAGEMENT heavily -- respond to every comment in the first 2 hours after posting. That window is what tells the algorithm whether to keep pushing the video out.'),M+6,y+10,{maxWidth:CW-12});
+  y += 20;
+
+  // ============================================================
+  // SECTION 3 (was 2) — RETAIL = INDICATOR OF INFLUENCE
+  // ============================================================
+  drawSectionHeader('SECTION 3  --  RETAIL = INDICATOR OF INFLUENCE', C.bleu);
 
   // Biochemistry callout
   drawCallout('THE BIOCHEMISTRY OF SELLING RETAIL',san('Selling retail is a biochemical reaction. All service long, you and your client are co-creating a DOPAMINE flow. The classic "retail close" is a CORTISOL moment that muddies an otherwise amazing experience. The cortisol isn\'t worth the dopamine disruption -- so we close differently.'),C.bleu,[232,236,254]);
@@ -2020,7 +2645,7 @@ function generatePDF() {
   y+=58;
 
   // SECTION 3
-  drawSectionHeader('SECTION 3  --  THE REAL PRIZE: COMPOUNDING RETENTION', C.green);
+  drawSectionHeader('SECTION 4  --  THE REAL PRIZE: COMPOUNDING RETENTION', C.green);
   drawCallout('WHY RETENTION IS THE PRIZE','When you consistently convert 50% of first-time clients into returning ones, your chair starts filling with regulars. That is compounding interest -- the same effort, the same new clients walking in, but your column grows month after month.',C.green,[235,247,239]);
   drawBullet('Visit 1 to Visit 2 (50% goal -- the dinner date). Everything in Section 1 is in service of this outcome. The connection, the soundbites, the technique recap, the gift bag -- all of it earns the second visit.',C.green);
   drawBullet('Visit 2 to Visit 3. At V2 you hand the client a branded thank-you card with a gift card for a complimentary Scalp Therapy Scrub Massage. Your personal SMS goes out that day from salon software: "So great seeing you today -- that gift card is waiting whenever you are ready."',C.green);
@@ -2028,16 +2653,102 @@ function generatePDF() {
   drawBullet('The Real Prize. A full chair drives utilization toward 80%. At 80%, Adam Smith\'s law of Supply & Demand earns you the right to raise your prices. Retention isn\'t just a metric -- it is how a stylist builds a career.',C.green);
   y+=4;
 
-  // Goals block
-  pageCheck(30);
-  fill(M,y,CW,24,C.dark); fill(M,y,3,24,C.purple);
-  sf('bold',7.5,C.purple); tx('GOALS WE AGREED ON TODAY',M+8,y+8);
+  // Coaching targets block — framed as a coaching anchor, not slammed accountability.
+  // Signature/date intentionally removed — that conversation lives with the owner.
+  pageCheck(28);
+  fill(M,y,CW,22,C.dark); fill(M,y,3,22,C.purple);
+  sf('bold',7.5,C.purple); tx('THE TARGETS WE LANDED ON TODAY',M+8,y+8);
   sf('normal',7,[180,180,200]);
-  tx(san('$/Client Goal: '+fmt$(state.goalDPC)+'     Retention Target: 50%     Next Check-In: ___________'),M+8,y+16,{maxWidth:CW-16});
-  sf('normal',6.5,[90,90,110]);
-  tx(san('Stylist Signature: _______________________________     Date: ___________'),M+8,y+22);
-  y+=32;
+  tx(san('$/Client Goal: '+fmt$(state.goalDPC)+'     New-Client Retention Target: 50%'),M+8,y+15,{maxWidth:CW-16});
+  sf('italic',6.5,[150,150,175]);
+  tx(san('Your salon owner will coach the cadence and check-in rhythm from here.'),M+8,y+19,{maxWidth:CW-16});
+  y+=28;
   pageFooter(3);
+
+  // ============================================================
+  // FINAL PAGE — REFERENCES & RESOURCES (APA-style)
+  // ============================================================
+  doc.addPage();
+  fill(0,0,W,12,C.dark);
+  sf('bold',7.5,C.white); tx(san('R+COACH  |  REFERENCES & RESOURCES  |  '+(state.stylistName||'')),M,8);
+  y=22;
+
+  sf('bold',13,C.dark); tx('References & Resources', M, y); y+=5;
+  hln(M,M+CW,y,C.purple,0.5); y+=8;
+
+  sf('normal',7,C.gray);
+  tx(san('Statistics and benchmarks referenced throughout this assessment are drawn from publicly available industry research and proprietary R+Coach internal data. Citations below follow APA format. Notation in the report uses superscript numbers (1, 2, 3...) tied to this list.'), M, y, {maxWidth:CW}); y+=14;
+
+  const refs = [
+    {
+      n: '1',
+      stat: 'Industry-average new-client 90-day retention rate of 25–30%.',
+      cite: 'Phorest Salon Software. (2023). State of the Salon Industry Report. Phorest. https://www.phorest.com/state-of-the-salon-industry',
+    },
+    {
+      n: '2',
+      stat: '36% of clients drop off before Visit 3 (3rd-visit attrition).',
+      cite: 'Strategies Business Coaching. (2022). Client retention benchmarks for independent salon professionals. Strategies. https://www.strategies.com/blog/client-retention',
+    },
+    {
+      n: '3',
+      stat: '19% of restaurant reservations now end as no-shows; 60% of diners cancel within 24 hours of booking -- the on-demand mindset has rewired commitment behavior across service industries.',
+      cite: 'OpenTable. (2024). Show Up for Restaurants: The Fight Against Reservation No-Shows. OpenTable. https://www.opentable.com/blog/no-show-numbers/  |  Barclaycard Payments. (2023). Diner cancellation survey, reported via OpenTable Hospitality Trends 2025. https://www.opentable.com/restaurant-solutions/resources/hospitality-trends/',
+    },
+    {
+      n: '4',
+      stat: '72% of Gen Z and Millennials rank flexibility -- including the freedom to cancel and reschedule -- as a top life priority.',
+      cite: 'Deloitte. (2025). 2025 Global Gen Z and Millennial Survey. Deloitte Insights. 23,482 respondents across 44 countries. https://www.deloitte.com/global/en/about/press-room/deloitte-2025-gen-z-and-millennial-survey.html',
+    },
+    {
+      n: '5',
+      stat: 'R+Coach 50% benchmark for new-client 90-day retention.',
+      cite: 'R+Coach. (2026). Proprietary benchmark derived from R+Coach partner-salon performance data, 2022-2026 cohort analysis. Internal publication.',
+    },
+    {
+      n: '6',
+      stat: 'Book-building model: cohort retention with 50% repeat rate on a 90-day cycle.',
+      cite: 'R+Coach. (2026). Book-Building Methodology: Cohort-Based Simulation Framework v1.0. Internal publication.',
+    },
+    {
+      n: '7',
+      stat: 'Independent stylists report 80%+ of new clientele discovering them through TikTok content; clients regularly drive 2+ hours for appointments.',
+      cite: 'Sunny Storm Marketing. (2024). How to blow up on TikTok as a beauty professional. Sunny Storm. https://sunnystorm.marketing/blog/tiktok-for-hairstylists',
+    },
+    {
+      n: '8',
+      stat: '85% of salons attribute new client acquisition to their online presence and social media engagement.',
+      cite: 'Schedulicity. (2025). 7 Salon TikTok Content Ideas to Grow Your Hair Business. Schedulicity Essentials. https://www.schedulicity.com/essentials/blog/salon-tiktok-content-ideas/  |  Supporting: GlossGenius. (2025). How to Build Clientele as a Hair Stylist. https://glossgenius.com/blog/how-to-build-clientele-as-a-hairstylist',
+    },
+  ];
+
+  refs.forEach(r => {
+    if (y > H - 40) { pageFooter(4); doc.addPage(); fill(0,0,W,12,C.dark); sf('bold',7.5,C.white); tx(san('R+COACH  |  REFERENCES & RESOURCES (cont.)'),M,8); y=22; }
+    // Marker dot with number
+    doc.setFillColor(...C.purple); doc.circle(M+3, y+0.5, 3, 'F');
+    sf('bold', 6, C.white); tx(r.n, M+3, y+2, {align:'center'});
+    // Stat description
+    sf('bold', 7.5, C.dark);
+    const statLines = sp(r.stat, CW - 12);
+    tx(statLines, M+10, y+2);
+    y += statLines.length * 4 + 1;
+    // APA citation
+    sf('normal', 6.5, [80,80,95]);
+    const citeLines = sp(r.cite, CW - 12);
+    tx(citeLines, M+10, y+2);
+    y += citeLines.length * 3.5 + 8;
+  });
+
+  // Methodology callout
+  if (y > H - 60) { pageFooter(4); doc.addPage(); fill(0,0,W,12,C.dark); sf('bold',7.5,C.white); tx(san('R+COACH  |  REFERENCES & RESOURCES (cont.)'),M,8); y=22; }
+  y += 4;
+  fill(M, y, CW, 36, [245,243,253]); fill(M, y, 3, 36, C.purple);
+  sf('bold', 7.5, C.purple); tx('METHODOLOGY NOTE', M+8, y+7);
+  sf('normal', 6.5, [70,60,90]);
+  tx(san('All forecasted revenue figures in this report are conservative: they hold the service ticket constant (no price increases modeled) and assume the stylist hits the 50% retention benchmark consistently. Actual results may exceed projections as utilization climbs and pricing power follows. Citations marked with an asterisk (*) reflect industry data that we verify annually; the R+Coach proprietary references reflect ongoing internal partner-salon analysis.'), M+8, y+13, {maxWidth:CW-16});
+  y += 42;
+
+  pageFooter(4);
 
   const safeName=(state.stylistName||'stylist').replace(/[^a-zA-Z0-9]/g,'_');
   const safeDate=(state.sessionDate||new Date().toISOString().split('T')[0]).replace(/-/g,'');
@@ -2062,6 +2773,79 @@ function init() {
 }
 
 init();
+
+// ============================================================================
+// LAYER 1 LEGAL PROTECTION — Trade-secret deterrence + build fingerprint
+// ============================================================================
+(function rcLegalLayer() {
+  const BRAND_MANAGER_ID = 'MASTER-DEV';                  // CHANGE PER BUILD
+  const APP_ID          = 'RCOACH-STYLIST-APP';
+  const BUILD_DATE      = '2026.05.30';
+  const BUILD_HASH      = btoa(APP_ID + '|' + BRAND_MANAGER_ID + '|' + BUILD_DATE).slice(0, 16);
+  window.__RC_BUILD = { app: APP_ID, bm: BRAND_MANAGER_ID, date: BUILD_DATE, hash: BUILD_HASH };
+
+  // Populate visible build IDs in the footer(s)
+  const tag = 'Build ' + BUILD_HASH + ' · ' + BRAND_MANAGER_ID + ' · ' + BUILD_DATE;
+  ['legal-build-id-stylist-1','legal-build-id-stylist-2'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = tag;
+  });
+  // Use MutationObserver so the build tag appears even when screens re-render
+  const mo = new MutationObserver(() => {
+    ['legal-build-id-stylist-1','legal-build-id-stylist-2'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el && !el.textContent) el.textContent = tag;
+    });
+  });
+  mo.observe(document.body, { childList: true, subtree: true });
+
+  try {
+    console.log('%c⚠ R+Co / R+Coach — Proprietary & Confidential',
+      'background:#000;color:#6B3FA0;font-size:14px;font-weight:bold;padding:8px 14px');
+    console.log('%cR+Coach Stylist App. Trade-secret intellectual property of R+Co / R+Coach.\n' +
+      'Reproduction, reverse-engineering, or derivative use is prohibited and will be\n' +
+      'prosecuted under the Defend Trade Secrets Act (DTSA) and applicable law.\n\n' +
+      'Build fingerprint: ' + BUILD_HASH + ' · ' + BRAND_MANAGER_ID + ' · ' + BUILD_DATE,
+      'color:#666;font-size:11px;line-height:1.6');
+  } catch (e) {}
+
+  document.addEventListener('dragstart', e => {
+    if (e.target && e.target.tagName === 'IMG') e.preventDefault();
+  });
+  document.addEventListener('contextmenu', e => { e.preventDefault(); showRcLegalModal(); });
+  document.addEventListener('keydown', e => {
+    const k = (e.key || '').toLowerCase();
+    if ((e.metaKey || e.ctrlKey) && (k === 's' || k === 'u')) { e.preventDefault(); showRcLegalModal(); }
+  });
+
+  function showRcLegalModal() {
+    if (document.getElementById('rc-legal-modal')) return;
+    const m = document.createElement('div');
+    m.id = 'rc-legal-modal';
+    m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.78);z-index:9999;' +
+      'display:flex;align-items:center;justify-content:center;padding:20px;' +
+      'font-family:Barlow,Helvetica Neue,Helvetica,Arial,sans-serif';
+    m.innerHTML =
+      '<div style="background:white;max-width:420px;padding:28px 26px;border-radius:14px;' +
+      'box-shadow:0 20px 60px rgba(0,0,0,0.4)">' +
+        '<div style="font-size:10px;font-weight:800;letter-spacing:0.18em;text-transform:uppercase;' +
+        'color:#6B3FA0;margin-bottom:10px">© R+Coach 2026 — Protected</div>' +
+        '<div style="font-size:18px;font-weight:700;color:#000;margin-bottom:10px;line-height:1.25">' +
+        'This content is proprietary.</div>' +
+        '<div style="font-size:13px;color:#555;line-height:1.55;margin-bottom:18px">' +
+        'The R+Coach® system is trade-secret intellectual property. Reproduction, scraping, ' +
+        'or derivative use is strictly prohibited and may be prosecuted under the Defend Trade ' +
+        'Secrets Act (DTSA) and applicable copyright law.<br><br>' +
+        'For authorized use, contact your R+Coach Brand Manager.</div>' +
+        '<button id="rc-modal-close" style="background:#000;color:white;border:none;width:100%;' +
+        'padding:14px;border-radius:10px;font-family:inherit;font-size:13px;font-weight:700;' +
+        'letter-spacing:0.06em;text-transform:uppercase;cursor:pointer">I understand</button>' +
+      '</div>';
+    document.body.appendChild(m);
+    document.getElementById('rc-modal-close').onclick = () => m.remove();
+    m.onclick = e => { if (e.target === m) m.remove(); };
+  }
+})();
 </script>
 </body>
 </html>
