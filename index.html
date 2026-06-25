@@ -1198,7 +1198,7 @@ function buildRoadmap() {
 
   // ── Book-Building Forecast — proper cohort simulation ────────
   // FIXED: month 1 = actual avg total clients/mo (NOT just new). Build from there.
-  const sim = simulateBookBuild(36);
+  const sim = simulateBookBuild(120);
   const TARGET_MO_CLIENTS = sim.maxBook; // Full book = capacity ceiling (slider-derived)
   const VISITS_YR    = 4;        // 90-day average return
   const TIP_PCT      = 0.20;     // ~20% tips assumption
@@ -1837,7 +1837,7 @@ function generatePDF() {
 
   // ── Book-Building Forecast — proper cohort simulation ─────────
   // FIXED: month 1 = actual avg total clients/mo (the entered baseline), not just new clients.
-  const sim = simulateBookBuild(36);
+  const sim = simulateBookBuild(120);
   const TARGET_MO_CLIENTS = sim.maxBook; // capacity ceiling from slider
   const VISITS_YR    = 4;
   const TIP_PCT      = 0.20;
