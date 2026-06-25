@@ -537,54 +537,55 @@ function simulateBookBuild(months = 36) {
     return 'full intake';
   }
 
-  const cohorts = []; // each: {month: M, size: N} — N new clients added in month M
+  // Model: the 90-day window is the AUDITION period. A cohort of new clients in month K
+  // is tested at month K+3 — the retained portion (50%) permanently JOINS the monthly
+  // recurring base from that month forward (they become regulars who visit at the
+  // stylist's normal monthly cadence). This produces compounding "+retained/month"
+  // growth once the first cohort matures at month 4.
+  const cohorts = []; // each: {month: M, size: N, matured: bool}
   const rows = [];
+  let recurringBase = existing; // grows as retained cohorts join the base
   let priorTotal = baseline;
 
   for (let m = 1; m <= months; m++) {
-    // Determine new-client intake for THIS month.
-    // Rule 1: Trust the real-world baseline. As long as the book is at or below the entered
-    //         baseline (priorTotal <= baseline), the stylist is empirically absorbing baseNew
-    //         clients/month — no throttle. The throttle ONLY engages once growth pushes the
-    //         book past where it was when the data was captured.
-    // Rule 2: From there, the throttle band reduces intake as the book climbs toward max.
+    // Step 1: Mature any cohort that has hit its 90-day audition mark this month.
+    // The retained portion (50% of intake) permanently joins the recurring base.
+    for (const c of cohorts) {
+      if (!c.matured && (m - c.month) >= cycleMonths) {
+        recurringBase += Math.round(c.size * retention);
+        c.matured = true;
+      }
+    }
+
+    // Step 2: Determine new-client intake for THIS month.
+    // Throttle engages once growth pushes the book past the entered baseline.
     const aboveBaseline = priorTotal > baseline;
     const factor = aboveBaseline ? throttleFactor(priorTotal) : 1;
     const monthlyNew = Math.round(baseNew * factor);
 
-    // Returners this month = sum over cohorts whose return cycle hits this exact month
-    // A cohort from month K returns at K+3, K+6, K+9 ...
-    let returning = 0;
-    for (const c of cohorts) {
-      const ageMonths = m - c.month;
-      if (ageMonths > 0 && ageMonths % cycleMonths === 0) {
-        returning += Math.round(c.size * retention);
-      }
-    }
-
-    // Total this month
-    let total = existing + returning + monthlyNew;
+    // Step 3: Total this month = recurring monthly base + this month's new first-timers.
+    let total = recurringBase + monthlyNew;
     // Hard cap at max book (capacity ceiling)
     if (total > maxBook) total = maxBook;
-    // Floor: the book never *shrinks* month-over-month. Transient throttle dips at tier
-    // transitions get smoothed — the chair stays at the prior level until growth catches up.
+    // Floor: the book never shrinks month-over-month.
     if (total < priorTotal) total = priorTotal;
-    // Also: never fall below the entered baseline (we trust the ground-truth observation).
+    // Floor: never fall below entered baseline (trust the ground-truth observation).
     if (total < baseline) total = baseline;
 
     const pct = maxBook > 0 ? priorTotal / maxBook : 0;
+    const newRegulars = Math.max(0, recurringBase - existing); // regulars added since start
     rows.push({
       month: m,
       total,
-      existing,
+      existing: recurringBase,
       new: monthlyNew,
-      returning,
+      returning: newRegulars,
       throttleBand: bandLabel(pct),
       pctOfMax: maxBook > 0 ? total / maxBook : 0,
     });
 
-    // Record cohort for future return cycles (only if any new came in)
-    if (monthlyNew > 0) cohorts.push({ month: m, size: monthlyNew });
+    // Record this month's cohort (only if any new came in)
+    if (monthlyNew > 0) cohorts.push({ month: m, size: monthlyNew, matured: false });
 
     priorTotal = total;
   }
