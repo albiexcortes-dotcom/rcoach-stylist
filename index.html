@@ -589,8 +589,10 @@ function simulateBookBuild(months = 36) {
     priorTotal = total;
   }
 
-  // Find first month where total crosses 90% of max (≈ "full book")
-  const fullThreshold = maxBook * 0.95;
+  // Find first month where total crosses the "full book" threshold.
+  // Use the smaller of (95% of capacity) and (100 clients — the display target),
+  // so monthsToFull resolves for any realistic stylist scenario.
+  const fullThreshold = Math.min(maxBook * 0.95, 100);
   const fullMonthRow = rows.find(r => r.total >= fullThreshold);
   const monthsToFull = fullMonthRow ? fullMonthRow.month : null;
 
